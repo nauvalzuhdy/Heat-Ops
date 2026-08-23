@@ -24,7 +24,7 @@ export const ANALYST_TABS: TabConfig[] = [
   { key: "solar", label: "Solar vs Canopy", icon: TreePine, implemented: false },
   { key: "building", label: "Building Evaluation", icon: Building2, implemented: false },
   { key: "photo", label: "Photo Analysis", icon: Camera, implemented: false },
-  { key: "charts", label: "Charts & Metrics", icon: LineChart, implemented: false },
+  { key: "charts", label: "Charts & Metrics", icon: LineChart, implemented: true },
   { key: "pdf", label: "Download PDF", icon: Download, implemented: false },
 ];
 

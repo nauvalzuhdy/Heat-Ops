@@ -5,13 +5,13 @@ import OverviewPanel from "./OverviewPanel";
 import HotspotPanel from "./HotspotPanel";
 import ShiftSchedulePanel from "./ShiftSchedulePanel";
 import RoiPanel from "./RoiPanel";
+import ChartsPanel from "./ChartsPanel";
 import ComingSoonPanel from "./ComingSoonPanel";
 
 const COMING_SOON_LABELS: Partial<Record<TabKey, string>> = {
   solar: "Solar vs Canopy",
   building: "Building Evaluation",
   photo: "Photo Analysis",
-  charts: "Charts & Metrics",
   pdf: "Download PDF",
 };
 
@@ -41,6 +41,9 @@ export default function ContentArea({
   }
   if (activeTab === "roi") {
     return <RoiPanel row={row} bbox={bbox} />;
+  }
+  if (activeTab === "charts") {
+    return <ChartsPanel tiles={row.heat_tiles ?? []} bbox={bbox} attribution={row.attribution?.heat ?? "unavailable"} />;
   }
   return <ComingSoonPanel label={COMING_SOON_LABELS[activeTab] ?? activeTab} />;
 }
