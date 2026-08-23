@@ -526,3 +526,18 @@ Scope deliberately narrowed by the user from project.md §5's full "(a) bar char
 **Not built this pass, per explicit scope:** pie land-cover chart, KPI summary cards, Recharts-based time-series (existing `ForecastSparkline` custom SVG stays as-is). Sub-task 6 (PDF report) is a separate follow-up prompt.
 
 ---
+
+## Analyst tab cleanup — permanent removal of Solar/Building/Photo tabs + AI Copilot forward-pointer banner
+
+project.md §5's "REVISI: dashboard vs chat" table + §6 formalized a restructuring decision: Solar vs Canopy, Building Evaluation, and Photo Analysis are not dashboard tabs at all — their compute logic moves to AI Copilot tools (`compare_interventions`, `check_new_building_feasibility`, `analyze_field_photo`, P2). This pass makes the Analyst page's navigation match that decision for real, rather than leaving 3 "(soon)" placeholder tabs implying they're still coming as dashboard features.
+
+**Built:**
+- `useAnalystTabs.ts` — `TabKey` union and `ANALYST_TABS` no longer include `"solar" | "building" | "photo"` at all (not just filtered out of the array — the type itself no longer has these members, so nothing in the codebase can reference them). Removed the now-unused `TreePine`/`Building2`/`Camera` icon imports. Remaining 6 tabs, in the requested order: Overview, Hotspot Detection, Shift Schedule, Heat Mitigation Planner, Charts & Metrics, Download PDF.
+- `ContentArea.tsx` — `COMING_SOON_LABELS` reduced to just `{ pdf: "Download PDF" }` (the only tab that still routes to `ComingSoonPanel`); no other logic touched.
+- `OverviewPanel.tsx` — added `CopilotForwardBanner`, a new small component rendered at the bottom of the Overview tab's existing content (after the BBox/spotcheck caption, so it doesn't disturb the stat-card grid above it): "Want to compare solar vs canopy, check if a new building fits, or analyze a field photo? Ask the AI Copilot." paired with a disabled-looking "AI Copilot · Soon" pill — deliberately styled to match `AppSidebar.tsx`'s own disabled AI Copilot nav item (muted colors, `aria-disabled`, `cursor-not-allowed`, "Soon" badge) rather than a dead link dressed up as a working one, since no `/copilot` route exists yet.
+
+**Flagging one discrepancy rather than silently resolving it either way:** this prompt's brief listed "Charts & Metrics (masih 'soon' sampai Sub-task 5 selesai)" — but Sub-task 5 (narrowed to the zone temperature bar chart) was already built, verified, and committed in the immediately preceding turn (commit `4f5d1be`). Left `charts` as `implemented: true` (matching the actual working feature) rather than reverting it to a placeholder, since regressing already-shipped, tested functionality to satisfy a instruction that appears to predate that work seemed like the wrong call to make silently either way. If Sub-task 5 should in fact go back behind a "soon" flag for some reason, say so and it's a one-line change.
+
+**Validated live** (`FORTYGUARD_MODE=cached`): `tsc --noEmit` and `eslint` clean. Loaded "Launch Complex 39A" — confirmed the icon toolbar now shows exactly 6 tabs (Overview, Hotspot, Shift, Heat, Charts, Download), Solar/Building/Photo entirely absent (not disabled-looking, just gone). Confirmed the banner renders at the bottom of Overview with the disabled "AI Copilot · Soon" pill. Smoke-tested all 4 previously-working tabs (Hotspot Detection, Shift Schedule, Heat Mitigation Planner, Charts & Metrics) after the routing-file changes — all still render correctly with real data, nothing broken by the cleanup. Checked console: one benign `AbortError: The user aborted a request` from switching tabs quickly (an in-flight fetch getting cancelled on unmount) — pre-existing behavior unrelated to this change, not a new error.
+
+---

@@ -9,9 +9,6 @@ import ChartsPanel from "./ChartsPanel";
 import ComingSoonPanel from "./ComingSoonPanel";
 
 const COMING_SOON_LABELS: Partial<Record<TabKey, string>> = {
-  solar: "Solar vs Canopy",
-  building: "Building Evaluation",
-  photo: "Photo Analysis",
   pdf: "Download PDF",
 };
 

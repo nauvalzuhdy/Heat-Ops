@@ -91,6 +91,34 @@ function ForecastSparkline({ points }: { points: HeatForecastEntry[] }) {
   );
 }
 
+// Forward-pointer to AI Copilot (project.md §5 "REVISI: dashboard vs chat" +
+// §6) — Solar vs Canopy, Building Evaluation, and Photo Analysis were
+// permanently removed as dedicated Analyst tabs; their compute logic moved
+// to AI Copilot tools (compare_interventions, check_new_building_feasibility,
+// analyze_field_photo) instead. AI Copilot itself isn't built yet (still
+// "Soon" in AppSidebar), so this points forward without pretending a working
+// link exists — same disabled/"Soon" visual treatment AppSidebar's own
+// AI Copilot nav item already uses, not a dead link styled as if it works.
+function CopilotForwardBanner() {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 px-4 py-3 dark:border-neutral-700 dark:bg-neutral-900/40">
+      <p className="text-xs text-neutral-600 dark:text-neutral-300">
+        Want to compare solar vs canopy, check if a new building fits, or analyze a field photo? Ask the AI Copilot.
+      </p>
+      <span
+        aria-disabled="true"
+        title="AI Copilot is coming soon"
+        className="flex shrink-0 cursor-not-allowed items-center gap-1.5 rounded-md bg-neutral-200 px-3 py-1.5 text-[11px] font-semibold text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+      >
+        AI Copilot
+        <span className="rounded-full bg-neutral-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300">
+          Soon
+        </span>
+      </span>
+    </div>
+  );
+}
+
 export default function OverviewPanel({
   row,
   bbox,
@@ -207,6 +235,8 @@ export default function OverviewPanel({
           )}
         </p>
       )}
+
+      <CopilotForwardBanner />
     </div>
   );
 }

@@ -1,9 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { LayoutDashboard, Flame, HardHat, Calculator, TreePine, Building2, Camera, LineChart, Download, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Flame, HardHat, Calculator, LineChart, Download, type LucideIcon } from "lucide-react";
 
-export type TabKey = "overview" | "hotspot" | "shift" | "roi" | "solar" | "building" | "photo" | "charts" | "pdf";
+// Solar vs Canopy, Building Evaluation, and Photo Analysis were REMOVED
+// permanently (project.md §5's "REVISI: dashboard vs chat" table + §6) —
+// their compute logic moved to AI Copilot tools (compare_interventions,
+// check_new_building_feasibility, analyze_field_photo) instead of staying as
+// dedicated Analyst tabs. Not a hidden/disabled state — the keys themselves
+// no longer exist. See the forward-pointer banner on OverviewPanel.
+export type TabKey = "overview" | "hotspot" | "shift" | "roi" | "charts" | "pdf";
 
 export type TabConfig = {
   key: TabKey;
@@ -21,9 +27,6 @@ export const ANALYST_TABS: TabConfig[] = [
   { key: "hotspot", label: "Hotspot Detection", icon: Flame, implemented: true },
   { key: "shift", label: "Shift Schedule", icon: HardHat, implemented: true },
   { key: "roi", label: "Heat Mitigation Planner", icon: Calculator, implemented: true },
-  { key: "solar", label: "Solar vs Canopy", icon: TreePine, implemented: false },
-  { key: "building", label: "Building Evaluation", icon: Building2, implemented: false },
-  { key: "photo", label: "Photo Analysis", icon: Camera, implemented: false },
   { key: "charts", label: "Charts & Metrics", icon: LineChart, implemented: true },
   { key: "pdf", label: "Download PDF", icon: Download, implemented: false },
 ];
