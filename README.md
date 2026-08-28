@@ -12,6 +12,7 @@ Draw an area on the map, and HeatOps pulls real surface-temperature data from Fo
 ## Table of contents
 
 - [What it does](#what-it-does)
+- [Who it's for, and who pays](#who-its-for-and-who-pays)
 - [Tech stack](#tech-stack)
 - [Getting started](#getting-started)
 - [Environment variables](#environment-variables)
@@ -58,6 +59,54 @@ Analysis and decisions, reading only the saved site record — no re-fetching, n
 ### 3. AI Copilot (`/copilot`)
 
 A DeepSeek-powered chat with function calling over the saved site data — compare interventions, inspect a zone, generate a report, analyse a field photo. It reads the same computation modules the dashboard uses, so the two can't disagree.
+
+---
+
+## Who it's for, and who pays
+
+**The user.** Operations and HSE (health, safety and environment) leads at industrial and
+infrastructure sites with outdoor crews — manufacturing plants, logistics yards, launch
+and test facilities, construction and energy sites. One person is typically accountable both
+for *when crews work outside* and for *whether a site-cooling budget gets approved*.
+
+**What they do today.** Both decisions are made without site-level data. Heat-stress limits
+are published in WBGT, but almost no site has a WBGT sensor grid, so shifts get scheduled by
+habit and by whoever complains first. And mitigation spend competes with every other capital
+line, where "trees make it cooler" is not a number a finance team can approve.
+
+**What HeatOps sells them.** Two things a site operator can act on from one drawn polygon:
+
+1. **An hour-by-hour exposure record** for the site, computed from FortyGuard temperature and
+   FortyGuard-measured humidity and classified against NIOSH limits — the evidence behind a
+   scheduling decision, and behind showing that the decision was reasoned.
+2. **A costed mitigation case** — canopy area, tree count, estimated cooling, annual kWh, and
+   payback — with every assumption disclosed and sourced, so it survives a finance review
+   rather than dying in one.
+
+**Why now.** Federal US heat rulemaking is live but unfinished: OSHA published a Notice of
+Proposed Rulemaking for *Heat Injury and Illness Prevention in Outdoor and Indoor Work
+Settings* in August 2024, held hearings through 2025, and has not published a final standard
+or a target date for one. Meanwhile six states — California, Maryland, Minnesota, Nevada,
+Oregon and Washington — already enforce their own heat standards, several triggered as low
+as 80°F.
+
+Being straight about what that does and does not mean: **Texas, where most of this project's
+demo sites sit, has no state heat standard.** For a Texas operator the driver is not a
+compliance mandate today — it is liability exposure, lost crew hours, and cooling energy
+cost, with a federal standard plausibly arriving later. In the six states that do have one,
+the same product is compliance evidence. That is a real difference in sales motion, not a
+detail to paper over.
+
+**Shape of the business.** Per-site annual subscription for monitored sites, priced against
+the FortyGuard credits each site consumes (one analysis is roughly eight API tasks: whole-day
+heatmap, five forecast hours, satellite segmentation, environmental parameters) plus margin;
+one-off assessments for consultants running a single study. Multi-site portfolio comparison,
+which the Copilot already does, is the natural expansion.
+
+**None of this is built.** There is no billing, no accounts, and no per-organisation data
+isolation — see [What doesn't work yet](#what-doesnt-work-yet). Authentication and
+multi-tenancy are the first engineering work any of the above depends on. This section
+describes the intended commercial model, not a shipped one.
 
 ---
 
