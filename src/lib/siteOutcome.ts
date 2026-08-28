@@ -142,6 +142,30 @@ export type OutcomeIntervention =
   | { status: "no_deficit"; currentTreeCanopyPct: number; targetTreeCanopyPct: number }
   | { status: "unavailable"; reason: string };
 
+/**
+ * The zero-capital lever: which captured hours are within the NIOSH limit and
+ * which are not, so work can be moved rather than paid for.
+ *
+ * Deliberately expressed in CAPTURED HOURS, never as a continuous window. The
+ * forecast is five discrete samples (+0/+3/+6/+9/+12h), so "safe from 06:00 to
+ * 10:00" would assert four hours this product never measured — the same
+ * fabrication the data-honesty rules forbid everywhere else. "Of 5 captured
+ * hours, 2 are within the limit" is what the data actually supports.
+ */
+export type OutcomeSchedule =
+  | {
+      status: "available";
+      hoursCaptured: number;
+      hoursOverLimit: number;
+      /** Clock labels of captured hours at or below the NIOSH limit, chronological. */
+      withinLimitLabels: string[];
+      /** Clock labels of captured hours above it, chronological. */
+      overLimitLabels: string[];
+      /** Least severe captured hour — the only useful answer when every hour is over the limit. */
+      leastSevereLabel: string | null;
+    }
+  | { status: "unavailable"; reason: string };
+
 /** Provenance flags the headline must carry with it — a bold number from cached data is a lie without them. */
 export type OutcomeProvenance = {
   heatSynthetic: boolean;
@@ -153,6 +177,8 @@ export type OutcomeProvenance = {
 export type SiteOutcome = {
   now: OutcomeNow;
   exposure: OutcomeExposure | null;
+  /** Rescheduling lever — costs nothing and applies today. */
+  schedule: OutcomeSchedule;
   intervention: OutcomeIntervention;
   provenance: OutcomeProvenance;
   /** The recommendation this outcome was built from — exposed so callers don't rebuild it. */
@@ -197,6 +223,33 @@ function buildExposure(timeline: ForecastTimelineSlot[]): OutcomeExposure | null
     worstRisk: overallShiftRisk(captured.map((s) => s.risk)),
     limitWbgtC: NIOSH_REL_WBGT_C[DEFAULT_WORKLOAD].unacclimatized,
     limitLabel: `NIOSH REL, ${WORKLOAD_LABEL.toLowerCase()} work, ${ACCLIMATIZATION_LABEL.toLowerCase()}`,
+  };
+}
+
+function buildSchedule(timeline: ForecastTimelineSlot[]): OutcomeSchedule {
+  const captured = timeline
+    .filter((s): s is Extract<ForecastTimelineSlot, { available: true }> => s.available)
+    .slice()
+    .sort((a, b) => a.offsetHours - b.offsetHours);
+
+  if (captured.length === 0) {
+    return {
+      status: "unavailable",
+      reason: "No forecast hours were captured for this site, so no schedule can be compared.",
+    };
+  }
+
+  const within = captured.filter((s) => s.risk === "safe");
+  const over = captured.filter((s) => s.risk !== "safe");
+  const leastSevere = captured.reduce((best, s) => (s.wbgtC < best.wbgtC ? s : best), captured[0]);
+
+  return {
+    status: "available",
+    hoursCaptured: captured.length,
+    hoursOverLimit: over.length,
+    withinLimitLabels: within.map((s) => s.timeLabel),
+    overLimitLabels: over.map((s) => s.timeLabel),
+    leastSevereLabel: leastSevere ? leastSevere.timeLabel : null,
   };
 }
 
@@ -306,6 +359,7 @@ export function buildSiteOutcome(input: {
   return {
     now: buildNow(input.heatStats, zones),
     exposure: buildExposure(input.forecastTimeline),
+    schedule: buildSchedule(input.forecastTimeline),
     intervention: buildIntervention(recommendation, input.siteAreaM2, input.savedRoiInputs),
     provenance: {
       heatSynthetic: input.attribution?.heat === "synthetic",
@@ -344,6 +398,21 @@ export type OutcomeSegments = {
   now: string;
   /** "3 of 5 captured forecast hours exceed the NIOSH heat limit" — null when nothing captured. */
   exposure: string | null;
+  /**
+   * The zero-capital lever, e.g. "Move outdoor work to 01:00 or 04:00" — null when
+   * there is nothing to move (no hours over the limit, or none captured).
+   */
+  scheduleAction: string | null;
+  /** "avoids 3 of 5 captured hours over the NIOSH limit, at no capital cost" */
+  scheduleDelta: string | null;
+  /**
+   * "-3 exposure-hours" — the zero-capital lever's delta, deliberately shaped to read
+   * alongside the canopy delta ("-0.5 to -1.5°C") so the two levers compare at a
+   * glance. ASCII hyphen for the same WinAnsi reason as `delta`.
+   */
+  scheduleDeltaHeadline: string | null;
+  /** Why there is no rescheduling move, when there is none. */
+  scheduleNote: string | null;
   /** "+1,240 trees (+18.2% canopy cover)" — null when there's no scenario to state. */
   action: string | null;
   /** "-0.5 to -1.4°C" — THE measurable delta. null when there's no scenario. */
@@ -364,6 +433,12 @@ function formatPaybackRange(fast: number | null, slow: number | null): string {
   return `payback ${fast.toFixed(1)}–${slow.toFixed(1)} yrs`;
 }
 
+/** ["01:00","04:00"] -> "01:00 or 04:00"; three or more -> "a, b or c". */
+function joinLabels(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
+}
+
 export function formatOutcomeSegments(o: SiteOutcome): OutcomeSegments {
   const nowParts: string[] = [];
   if (o.now.peakTempC != null) nowParts.push(`Peak ${o.now.peakTempC.toFixed(1)}°C`);
@@ -380,10 +455,42 @@ export function formatOutcomeSegments(o: SiteOutcome): OutcomeSegments {
         `${o.exposure.slotsAvailable === 1 ? "hour" : "hours"} stay within the NIOSH heat limit`
     : null;
 
+  const sched = o.schedule;
+  let scheduleAction: string | null = null;
+  let scheduleDelta: string | null = null;
+  let scheduleNote: string | null = null;
+  let scheduleDeltaHeadline: string | null = null;
+  if (sched.status === "unavailable") {
+    scheduleNote = sched.reason;
+  } else if (sched.hoursOverLimit === 0) {
+    scheduleNote =
+      `All ${sched.hoursCaptured} captured ${sched.hoursCaptured === 1 ? "hour is" : "hours are"} within the ` +
+      `NIOSH limit — no rescheduling needed.`;
+  } else if (sched.withinLimitLabels.length === 0) {
+    // The genuinely important case: moving the shift cannot help, so saying
+    // "reschedule" here would be actively unsafe advice.
+    scheduleNote =
+      `Every one of the ${sched.hoursCaptured} captured hours is over the NIOSH limit — rescheduling ` +
+      `within this window cannot avoid exposure, so heat controls are required` +
+      (sched.leastSevereLabel ? ` (${sched.leastSevereLabel} is the least severe).` : ".");
+  } else {
+    scheduleAction = `Move outdoor work to ${joinLabels(sched.withinLimitLabels)}`;
+    // No dash before "at no capital cost": formatOutcomeSentence() already joins
+    // action and delta with an em dash, and two in a row reads as a stutter.
+    scheduleDelta =
+      `avoids ${sched.hoursOverLimit} of ${sched.hoursCaptured} captured hours over the NIOSH limit, ` +
+      `at no capital cost`;
+    scheduleDeltaHeadline = `-${sched.hoursOverLimit} exposure-${sched.hoursOverLimit === 1 ? "hour" : "hours"}`;
+  }
+
   if (o.intervention.status === "no_deficit") {
     return {
       now,
       exposure,
+      scheduleAction,
+      scheduleDelta,
+      scheduleDeltaHeadline,
+      scheduleNote,
       action: null,
       delta: null,
       economics: null,
@@ -393,7 +500,18 @@ export function formatOutcomeSegments(o: SiteOutcome): OutcomeSegments {
     };
   }
   if (o.intervention.status === "unavailable") {
-    return { now, exposure, action: null, delta: null, economics: null, interventionNote: o.intervention.reason };
+    return {
+      now,
+      exposure,
+      scheduleAction,
+      scheduleDelta,
+      scheduleDeltaHeadline,
+      scheduleNote,
+      action: null,
+      delta: null,
+      economics: null,
+      interventionNote: o.intervention.reason,
+    };
   }
 
   const iv = o.intervention;
@@ -417,7 +535,18 @@ export function formatOutcomeSegments(o: SiteOutcome): OutcomeSegments {
       : `~${formatKwhCompact(iv.kwhPerYearLow)}–${formatKwhCompact(iv.kwhPerYearHigh)} kWh/yr`;
   const economics = `${kwh} · ${formatUsdCompact(iv.totalCostUSD)} invested · ${formatPaybackRange(iv.paybackYearsFast, iv.paybackYearsSlow)}`;
 
-  return { now, exposure, action, delta, economics, interventionNote: null };
+  return {
+    now,
+    exposure,
+    scheduleAction,
+    scheduleDelta,
+    scheduleDeltaHeadline,
+    scheduleNote,
+    action,
+    delta,
+    economics,
+    interventionNote: null,
+  };
 }
 
 /**
@@ -427,9 +556,21 @@ export function formatOutcomeSegments(o: SiteOutcome): OutcomeSegments {
  */
 export function formatOutcomeSentence(o: SiteOutcome): string {
   const s = formatOutcomeSegments(o);
-  const first = [s.now, s.exposure].filter(Boolean).join(" · ");
-  if (!s.action || !s.delta) {
-    return s.interventionNote ? `${first}. ${s.interventionNote}` : `${first}.`;
+  const parts: string[] = [`${[s.now, s.exposure].filter(Boolean).join(" · ")}.`];
+
+  // The rescheduling lever comes first on purpose: it costs nothing and applies
+  // today, where the canopy scenario is capital spend that pays back over years.
+  if (s.scheduleAction && s.scheduleDelta) {
+    parts.push(`Today, no capital: ${s.scheduleAction} — ${s.scheduleDelta}.`);
+  } else if (s.scheduleNote) {
+    parts.push(s.scheduleNote);
   }
-  return `${first}. Recommended: ${s.action} → ${s.delta} estimated cooling, ${s.economics}.`;
+
+  if (s.action && s.delta) {
+    parts.push(`Longer term: ${s.action} → ${s.delta} estimated cooling, ${s.economics}.`);
+  } else if (s.interventionNote) {
+    parts.push(s.interventionNote);
+  }
+
+  return parts.join(" ");
 }

@@ -979,9 +979,41 @@ function CoverPage({ site, generatedAt }: { site: SiteReportData["site"]; genera
 // the dashboard state the same outcome in the same words, not merely from
 // the same numbers. No Fragments here: every branch returns a real View, so
 // react-pdf's layout engine never has to flatten one.
+// One lever inside the headline band. Mirrors components/analyst/OutcomeBanner
+// .tsx's LeverCard: the delta is the only thing set at display size, and when a
+// lever is unavailable its reason takes the same slot at body size so an absent
+// option never reads as a missing number.
+function OutcomeLever({
+  label,
+  action,
+  headline,
+  detail,
+  note,
+}: {
+  label: string;
+  action: string | null;
+  headline: string | null;
+  detail: string | null;
+  note: string | null;
+}) {
+  return (
+    <View style={styles.outcomeCol}>
+      <Text style={styles.outcomeLabel}>{label}</Text>
+      {headline ? (
+        <View>
+          {action ? <Text style={styles.outcomeAction}>{action}</Text> : null}
+          <Text style={styles.outcomeDelta}>{headline}</Text>
+          {detail ? <Text style={styles.outcomeEconomics}>{detail}</Text> : null}
+        </View>
+      ) : (
+        <Text style={styles.outcomeEconomics}>{note}</Text>
+      )}
+    </View>
+  );
+}
+
 function OutcomeBand({ outcome }: { outcome: SiteReportData["outcome"] }) {
   const segments = formatOutcomeSegments(outcome);
-  const hasAction = segments.action != null && segments.delta != null;
   const { provenance } = outcome;
   const provenanceNotes: string[] = [];
   if (provenance.heatSynthetic) provenanceNotes.push("heat figures are cached/synthetic, not live measurements");
@@ -996,34 +1028,40 @@ function OutcomeBand({ outcome }: { outcome: SiteReportData["outcome"] }) {
       {provenanceNotes.length > 0 && (
         <Text style={styles.outcomeProvenance}>Note: {provenanceNotes.join("; ")}.</Text>
       )}
-      {hasAction && (
-        <View>
-          <View style={styles.outcomeSplitRow}>
-            <View style={styles.outcomeCol}>
-              <Text style={styles.outcomeLabel}>
-                {outcome.intervention.status === "available" && outcome.intervention.isSavedScenario
-                  ? "With the saved scenario"
-                  : "With the recommended action"}
-              </Text>
-              <Text style={styles.outcomeAction}>{segments.action}</Text>
-            </View>
-            <View style={styles.outcomeCol}>
-              <Text style={styles.outcomeLabel}>Estimated cooling</Text>
-              <Text style={styles.outcomeDelta}>{segments.delta}</Text>
-            </View>
-          </View>
-          <Text style={styles.outcomeEconomics}>{segments.economics}</Text>
-          <Text style={styles.caveat}>
-            Cooling is estimated from published canopy-cover research indexed to how much canopy this scenario
-            adds; energy and payback use the disclosed planning-grade assumptions in Section 6. This is a
-            planning estimate for this site, not a measured or guaranteed result.
-            {outcome.intervention.status === "available" &&
-              outcome.intervention.beyondValidatedRange &&
-              " This scenario adds more canopy than the source studies tested, so its cooling figure is a linear extrapolation beyond validated range."}
-          </Text>
-        </View>
-      )}
-      {!hasAction && <Text style={styles.bodyText}>{segments.interventionNote}</Text>}
+
+      {/* Two levers, rescheduling first: it costs nothing and applies today,
+          where the canopy scenario is capital spend recovered over years. */}
+      <View style={styles.outcomeSplitRow}>
+        <OutcomeLever
+          label="Today · no capital"
+          action={segments.scheduleAction}
+          headline={segments.scheduleDeltaHeadline}
+          detail={segments.scheduleDelta}
+          note={segments.scheduleNote}
+        />
+        <OutcomeLever
+          label={
+            outcome.intervention.status === "available" && outcome.intervention.isSavedScenario
+              ? "Longer term · saved scenario"
+              : "Longer term · recommended"
+          }
+          action={segments.action}
+          headline={segments.delta}
+          detail={segments.economics}
+          note={segments.interventionNote}
+        />
+      </View>
+
+      <Text style={styles.caveat}>
+        Exposure hours are the forecast hours actually captured for this site (not a continuous window),
+        classified against NIOSH limits — see Section 5 for each hour and its humidity source.
+        {segments.delta
+          ? " Cooling is estimated from published canopy-cover research indexed to how much canopy this scenario adds; energy and payback use the disclosed planning-grade assumptions in Section 6. This is a planning estimate for this site, not a measured or guaranteed result."
+          : ""}
+        {outcome.intervention.status === "available" &&
+          outcome.intervention.beyondValidatedRange &&
+          " This scenario adds more canopy than the source studies tested, so its cooling figure is a linear extrapolation beyond validated range."}
+      </Text>
     </View>
   );
 }
