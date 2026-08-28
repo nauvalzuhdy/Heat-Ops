@@ -51,7 +51,7 @@ Analysis and decisions, reading only the saved site record — no re-fetching, n
 |---|---|
 | **Overview** | Site info, land cover, heat stats, forecast sparkline, data-provenance badges, hotspot exposure gauge |
 | **Hotspot Detection** | Satellite view + pixel-native thermal grid + per-zone bar chart, in a 3×3 compass-labelled grid (Northwest … Southeast), with bidirectional hover cross-highlighting between chart and both maps |
-| **Shift Schedule** | Estimated WBGT per forecast slot, classified against NIOSH 2016 Recommended Exposure Limits → safe / caution / danger windows for outdoor work |
+| **Shift Schedule** | WBGT per forecast slot — computed from FortyGuard air temperature **and FortyGuard-measured hourly humidity** (`/v1/env_params`) — classified against NIOSH 2016 Recommended Exposure Limits → safe / caution / danger windows for outdoor work |
 | **Heat Mitigation Planner** | Deterministic canopy-deficit recommendation + an editable ROI simulator (trees / canopy / solar → cost, energy saved, payback, break-even chart) |
 | **Download PDF** | A print-ready assessment report of everything above |
 
@@ -222,6 +222,19 @@ Notable modules in `src/lib/`:
 
 Behaviours worth knowing before you debug something that isn't actually broken. All of these were confirmed against the live API.
 
+**Three endpoints are used.** `POST /v1/heatmap` (per-tile temperature over the whole AOI
+polygon), `POST /v1/satellite` (centroid land-cover segmentation), and `POST /v1/env_params`
+(hourly environmental parameters at a point — relative humidity, wet-bulb temperature,
+heat index, cloud cover, solar irradiance). All three are async: they return an
+`activity_id` you poll via `GET /v1/status/{activity_id}`.
+
+**`/v1/env_params` takes a temperature as INPUT.** It is not another temperature source —
+you hand it the temperature you already have (here, FortyGuard's own reading for the AOI)
+plus a lat/lon and date, and it returns the surrounding environmental series. With
+`filter_type: 3` that is all 24 hours of the day in the location's own timezone, which is
+why one call covers every forecast slot. Its `metadata.timestamps` carry that local UTC
+offset, so match them to your slots by absolute instant, never by clock-face hour.
+
 **Coverage is US-only.** AOIs outside the United States return no data.
 
 **Async by design.** `POST /v1/heatmap` returns an `activity_id` (nested under `data`); poll `GET /v1/status/{activity_id}` with 3s → 6s → 12s backoff until `Completed`.
@@ -381,9 +394,13 @@ Honest limitations, so you know what you’re looking at.
   derived, not directly measured, and the canopy-to-cooling range comes from studies that
   tested up to ~30 percentage points of canopy change; scenarios beyond that are flagged
   as extrapolation.
-- **WBGT is estimated, not measured.** There is no humidity, wind, or radiant-heat input;
-  relative humidity is assumed at a fixed 40%. Risk bands are a NIOSH-based screening
-  estimate, not a certified individual safety assessment.
+- **WBGT is derived, not measured.** Relative humidity IS now real — FortyGuard's
+  `/v1/env_params` supplies an hourly series and each forecast slot uses the reading for
+  its own hour — but wind speed and radiant heat are still unavailable, so a shade
+  approximation is used rather than a full outdoor WBGT. Sites saved before this existed,
+  and any hour with no reading, fall back to a fixed 40% and are labelled `Assumed`.
+  Risk bands remain a NIOSH-based screening estimate, not a certified individual safety
+  assessment.
 - **Saved sites are capped at 60** and not paginated.
 - **Mobile and tablet layouts are newly fixed and lightly tested** — the app is built for a
   desktop operator workflow.

@@ -4,11 +4,13 @@
 // Storage path and the row id agree from the first write.
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
+import * as turf from "@turf/turf";
 import type { Polygon } from "geojson";
 import { getSupabaseServiceClient, SITE_PHOTOS_BUCKET } from "@/lib/supabaseServer";
 import { fetchSatelliteExportImage } from "@/lib/arcgisSatellite";
 import { buildSiteRecord } from "@/lib/siteRecord";
 import type { HeatForecastEntry } from "@/lib/siteRecord";
+import { runEnvParams, relativeHumidityAt } from "@/lib/fortyguard";
 import type { HeatmapResult, SatelliteSegmentationResult } from "@/lib/fortyguard";
 import type { OverpassLandCover } from "@/lib/overpass";
 import type { EndpointResult } from "@/store/analysisStore";
@@ -124,6 +126,104 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ siteId: id });
 }
 
+// ---------------------------------------------------------------------------
+// Humidity enrichment (FortyGuard /v1/env_params).
+//
+// Runs server-side, here, rather than in Map View: this route already has the
+// site's aoi_geometry and its previously-stored slots, so the client needs no
+// change and there is exactly one place that can spend a credit for this.
+//
+// Cost control matters because ForecastPanel re-PATCHes the full accumulated
+// slot list whenever it changes. Two guards keep that from becoming one
+// env_params call per slot: humidity already stored for a given targetTime is
+// reused, and the call is skipped entirely when nothing is missing. In the
+// normal flow captureFullForecast() resolves all five slots in one state
+// update, so this is a single extra call per analysis.
+//
+// Failure is never fatal: any error, missing geometry, or absent reading leaves
+// the entries exactly as the client sent them, and lib/wbgt.ts then labels those
+// slots ASSUMED. A forecast that saves without humidity is strictly better than
+// a forecast that fails to save.
+// ---------------------------------------------------------------------------
+async function attachMeasuredHumidity(
+  siteId: string,
+  entries: HeatForecastEntry[],
+): Promise<HeatForecastEntry[]> {
+  if (entries.length === 0) return entries;
+
+  const supabase = getSupabaseServiceClient();
+  const { data, error } = await supabase
+    .from("sites")
+    .select("aoi_geometry, heat_forecast")
+    .eq("id", siteId)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.warn("[sites] humidity enrichment skipped — could not read site:", error?.message);
+    return entries;
+  }
+
+  // Reuse anything an earlier PATCH already resolved, keyed by the instant the
+  // slot is FOR (targetTime), not by hourOffset — offsets are relative to when
+  // the analysis ran and would collide across re-analyses of the same site.
+  const stored = (data.heat_forecast as HeatForecastEntry[] | null) ?? [];
+  const knownHumidity = new Map<string, { pct: number; cached: boolean }>();
+  for (const e of stored) {
+    if (typeof e?.relativeHumidityPct === "number" && e.targetTime) {
+      knownHumidity.set(e.targetTime, { pct: e.relativeHumidityPct, cached: Boolean(e.humidityCached) });
+    }
+  }
+
+  const withKnown = entries.map((e) => {
+    const hit = knownHumidity.get(e.targetTime);
+    return hit ? { ...e, relativeHumidityPct: hit.pct, humidityCached: hit.cached } : e;
+  });
+  if (withKnown.every((e) => typeof e.relativeHumidityPct === "number")) return withKnown;
+
+  const geometry = data.aoi_geometry as Polygon | null;
+  if (!geometry) return withKnown;
+
+  try {
+    const [longitude, latitude] = turf.centroid(geometry).geometry.coordinates;
+
+    // `temperature` is an input to /v1/env_params, so it gets the temperature
+    // FortyGuard already measured for this AOI — the mean across captured slots,
+    // which is representative of the window the humidity series is used for.
+    const temps = withKnown.map((e) => e.meanTempC).filter((t) => typeof t === "number" && Number.isFinite(t));
+    if (temps.length === 0) return withKnown;
+    const temperature = temps.reduce((a, b) => a + b, 0) / temps.length;
+
+    // Ask for the day the READINGS are actually from. When the heatmap fell back
+    // to an earlier date, `dateUsed` is that date — pairing humidity from a
+    // different day than the temperature would be exactly the kind of quiet
+    // mismatch this codebase refuses elsewhere.
+    const startDate =
+      withKnown.find((e) => !e.relativeHumidityPct && e.dateUsed)?.dateUsed ??
+      withKnown[0]?.dateUsed ??
+      withKnown[0]?.targetTime?.slice(0, 10);
+    if (!startDate) return withKnown;
+
+    const { cached, result } = await runEnvParams({ latitude, longitude, temperature, startDate });
+
+    let filled = 0;
+    const enriched = withKnown.map((e) => {
+      if (typeof e.relativeHumidityPct === "number") return e;
+      const pct = relativeHumidityAt(result, e.targetTime);
+      if (pct == null) return e;
+      filled++;
+      return { ...e, relativeHumidityPct: pct, humidityCached: cached };
+    });
+    console.log(
+      `[sites] env_params humidity attached to ${filled}/${withKnown.length} forecast slots` +
+        ` (cached=${cached}, start_date=${startDate})`,
+    );
+    return enriched;
+  } catch (err) {
+    console.error("[sites] env_params humidity enrichment failed, storing slots without it:", err);
+    return withKnown;
+  }
+}
+
 // §4.4 — called from Map View each time a new forecast slot resolves, after
 // the site row already exists. Client sends the full accumulated slot list
 // (it already holds all of them in analysisStore) rather than one slot at a
@@ -143,8 +243,13 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Missing or invalid 'heatForecast' (expected an array)" }, { status: 400 });
   }
 
+  // Attach FortyGuard-measured humidity before storing, so lib/wbgt.ts computes
+  // each slot's WBGT from that hour's real humidity instead of the flat
+  // assumption. Degrades to the unenriched list on any failure.
+  const heatForecast = await attachMeasuredHumidity(body.siteId, body.heatForecast);
+
   const supabase = getSupabaseServiceClient();
-  const { error } = await supabase.from("sites").update({ heat_forecast: body.heatForecast }).eq("id", body.siteId);
+  const { error } = await supabase.from("sites").update({ heat_forecast: heatForecast }).eq("id", body.siteId);
 
   if (error) {
     console.error("[sites] heat_forecast update failed:", error);

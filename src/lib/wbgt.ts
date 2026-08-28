@@ -50,6 +50,13 @@ function vaporPressureHpa(airTempC: number, relativeHumidityPct: number): number
 // this project's own demo data. A humid site's true WBGT runs higher than
 // this estimate (understating risk there); an arid site's runs lower
 // (overstating it here). Disclosed in the UI, not hidden.
+// Fallback only, since 2026-08-28. Real per-hour humidity now comes from
+// FortyGuard /v1/env_params and is stored per forecast slot
+// (lib/siteRecord.ts's HeatForecastEntry.relativeHumidityPct). This constant is
+// what a slot falls back to when that reading is genuinely absent — a site saved
+// before env_params was wired in, a failed call, or an hour the response did not
+// cover — and every such slot is labelled ASSUMED rather than quietly mixed in
+// with measured ones.
 export const ASSUMED_RELATIVE_HUMIDITY_PCT = 40;
 
 export function estimateWBGT(airTempC: number, relativeHumidityPct: number = ASSUMED_RELATIVE_HUMIDITY_PCT): number {
@@ -164,6 +171,18 @@ export type ClassifiedForecastSlot = {
   temperatureSource: TemperatureSource;
   wbgtC: number;
   wbgtProvenance: "ESTIMATED";
+  /** The relative humidity actually used to compute `wbgtC` for this slot. */
+  relativeHumidityPct: number;
+  /**
+   * MEASURED — a live FortyGuard /v1/env_params reading for this slot's own hour.
+   * CACHED   — cached-mode fixture value (lib/fortyguardFixtures.ts): a real
+   *            SHAPE with a synthesized number, so it must never be shown as a
+   *            measurement. Mirrors how `temperatureSource` already separates
+   *            "FortyGuard — Real" from "FortyGuard — Cached".
+   * ASSUMED  — ASSUMED_RELATIVE_HUMIDITY_PCT, because no reading exists at all.
+   * Never collapse these in the UI: only the first is data.
+   */
+  humidityProvenance: "MEASURED" | "CACHED" | "ASSUMED";
   risk: ShiftRisk;
 };
 
@@ -172,8 +191,23 @@ export function classifyForecastEntry(entry: {
   targetTime: string;
   meanTempC: number;
   cached: boolean;
+  /** FortyGuard /v1/env_params humidity for this slot's hour, when one was stored. */
+  relativeHumidityPct?: number;
+  /** True when that humidity came from cached-mode fixtures rather than a live call. */
+  humidityCached?: boolean;
 }): ClassifiedForecastSlot {
-  const wbgtC = estimateWBGT(entry.meanTempC);
+  // A stored 0% would be physically implausible and is far more likely to be a
+  // serialization artifact than a reading, so it is rejected rather than used —
+  // and rejection means falling back to the labelled assumption, never a guess.
+  const measured =
+    typeof entry.relativeHumidityPct === "number" &&
+    Number.isFinite(entry.relativeHumidityPct) &&
+    entry.relativeHumidityPct > 0 &&
+    entry.relativeHumidityPct <= 100;
+  const relativeHumidityPct = measured
+    ? (entry.relativeHumidityPct as number)
+    : ASSUMED_RELATIVE_HUMIDITY_PCT;
+  const wbgtC = estimateWBGT(entry.meanTempC, relativeHumidityPct);
   return {
     targetTime: entry.targetTime,
     offsetHours: entry.hourOffset,
@@ -181,6 +215,8 @@ export function classifyForecastEntry(entry: {
     temperatureSource: entry.cached ? "FortyGuard — Cached" : "FortyGuard — Real",
     wbgtC,
     wbgtProvenance: "ESTIMATED",
+    relativeHumidityPct,
+    humidityProvenance: measured ? (entry.humidityCached ? "CACHED" : "MEASURED") : "ASSUMED",
     risk: classifyShiftRisk(wbgtC),
   };
 }
@@ -204,6 +240,116 @@ export const SHIFT_SCHEDULE_METHODOLOGY_BULLETS: string[] = [
 // Kept for any caller still expecting one paragraph (e.g. a plain-text
 // tooltip) — same content as the bullets above, just joined.
 export const SHIFT_SCHEDULE_ASSUMPTIONS_TEXT = SHIFT_SCHEDULE_METHODOLOGY_BULLETS.join(" ");
+
+// ---------------------------------------------------------------------------
+// Humidity provenance (added with FortyGuard /v1/env_params, 2026-08-28).
+//
+// The constant text above describes the OLD behaviour — a flat assumed humidity —
+// and stays correct for any site whose slots genuinely have no reading (sites
+// saved before this existed, or a failed call). It is deliberately left intact
+// rather than rewritten, so nothing that still imports it starts describing a
+// measurement the slot never had. Surfaces that know a site's actual provenance
+// should call the builders below instead, which say only what is true for THAT
+// site — including the mixed case, where some hours were measured and some fell
+// back.
+// ---------------------------------------------------------------------------
+export type HumidityProvenanceSummary = {
+  /** Slots whose WBGT used a real, live /v1/env_params reading. */
+  measuredCount: number;
+  /** Slots using a cached-mode fixture humidity — synthetic, never a measurement. */
+  cachedCount: number;
+  /** Slots that fell back to ASSUMED_RELATIVE_HUMIDITY_PCT. */
+  assumedCount: number;
+  /** Observed range across LIVE measured slots only — null when none were measured. */
+  minPct: number | null;
+  maxPct: number | null;
+};
+
+export function summarizeHumidityProvenance(slots: ForecastTimelineSlot[]): HumidityProvenanceSummary {
+  const available = slots.filter(
+    (s): s is Extract<ForecastTimelineSlot, { available: true }> => s.available,
+  );
+  const measured = available.filter((s) => s.humidityProvenance === "MEASURED");
+  const cached = available.filter((s) => s.humidityProvenance === "CACHED");
+  const values = measured.map((s) => s.relativeHumidityPct);
+  return {
+    measuredCount: measured.length,
+    cachedCount: cached.length,
+    assumedCount: available.length - measured.length - cached.length,
+    minPct: values.length > 0 ? Math.min(...values) : null,
+    maxPct: values.length > 0 ? Math.max(...values) : null,
+  };
+}
+
+function humidityRangeLabel(summary: HumidityProvenanceSummary): string {
+  if (summary.minPct == null || summary.maxPct == null) return "";
+  return Math.abs(summary.maxPct - summary.minPct) < 0.05
+    ? `${summary.minPct.toFixed(1)}%`
+    : `${summary.minPct.toFixed(1)}—${summary.maxPct.toFixed(1)}%`;
+}
+
+/** One-line assumption note for the primary UI, honest about this site's mix. */
+export function shiftShortAssumptionText(summary: HumidityProvenanceSummary): string {
+  const shade =
+    "WBGT is derived with a shade approximation, so it remains an estimate, not a direct or certified " +
+    "WBGT measurement.";
+  if (summary.measuredCount === 0) {
+    if (summary.cachedCount > 0) {
+      return (
+        `Humidity for this site came from cached-mode fixtures, not a live FortyGuard call — the values ` +
+        `are synthetic and must not be read as measurements. ${shade}`
+      );
+    }
+    return (
+      `WBGT is estimated from FortyGuard air temperature using an assumed ${ASSUMED_RELATIVE_HUMIDITY_PCT}% ` +
+      `relative humidity — no measured humidity is stored for this site. ${shade}`
+    );
+  }
+  const range = humidityRangeLabel(summary);
+  if (summary.assumedCount === 0 && summary.cachedCount === 0) {
+    return (
+      `WBGT is computed from FortyGuard air temperature and FortyGuard's own measured relative humidity ` +
+      `(${range}) for each slot's hour — not an assumed figure. ${shade}`
+    );
+  }
+  return (
+    `WBGT uses FortyGuard's measured relative humidity (${range}) for ${summary.measuredCount} of ` +
+    `${summary.measuredCount + summary.assumedCount} slots; the rest fall back to an assumed ` +
+    `${ASSUMED_RELATIVE_HUMIDITY_PCT}%. ${shade}`
+  );
+}
+
+/** Full methodology bullets, with the humidity line reflecting what this site actually used. */
+export function buildShiftMethodologyBullets(summary: HumidityProvenanceSummary): string[] {
+  const humidityBullet =
+    summary.measuredCount === 0 && summary.cachedCount > 0
+      ? `Relative humidity came from cached-mode fixtures, not a live FortyGuard call — synthetic values ` +
+        `with a realistic shape, never measurements. Re-analyze this site in live mode for real humidity.`
+      : summary.measuredCount === 0
+      ? `Relative humidity is assumed at a fixed ${ASSUMED_RELATIVE_HUMIDITY_PCT}% — not measured, not ` +
+        `per-site. A humid site's true WBGT runs higher than this estimate (understating risk there); an ` +
+        `arid site's runs lower.`
+      : summary.assumedCount === 0 && summary.cachedCount === 0
+        ? `Relative humidity is measured, not assumed: FortyGuard's /v1/env_params returns an hourly series ` +
+          `for this location and each slot uses the reading for its own hour (${humidityRangeLabel(summary)} ` +
+          `across the captured slots).`
+        : `Relative humidity is measured via FortyGuard's /v1/env_params for ${summary.measuredCount} of ` +
+          `${summary.measuredCount + summary.assumedCount} captured slots (${humidityRangeLabel(summary)}); ` +
+          `slots with no reading for their hour fall back to an assumed ${ASSUMED_RELATIVE_HUMIDITY_PCT}% ` +
+          `and are labelled as assumed.`;
+
+  return [
+    "FortyGuard provides air temperature at the site, not a direct WBGT measurement.",
+    humidityBullet,
+    "Wind speed and radiant heat are still not available for this site, so the shade approximation below is used rather than a full outdoor WBGT.",
+    "WBGT is approximated using the Australian Bureau of Meteorology's shade formula (WBGT ≈ 0.567·T + 0.393·e + 3.94).",
+    "The result is an estimate for screening purposes, not a certified WBGT measurement.",
+    `Risk bands use NIOSH's 2016 Recommended Exposure Limits (via OSHA's Heat Hazard Recognition table) for ` +
+      `${WORKLOAD_LABEL.toLowerCase()} work, ${ACCLIMATIZATION_LABEL.toLowerCase()}: Safe at/below ` +
+      `${NIOSH_REL_WBGT_C[DEFAULT_WORKLOAD].unacclimatized}°C WBGT, Caution up to ` +
+      `${NIOSH_REL_WBGT_C[DEFAULT_WORKLOAD].acclimatized}°C WBGT, Danger above that.`,
+  ];
+}
 
 // ---------------------------------------------------------------------------
 // Timestamp formatting — deliberately NOT Intl.toLocale*DateString/TimeString.
@@ -265,6 +411,8 @@ export function buildForecastTimeline(
     cached: boolean;
     dateUsed?: string;
     isFallbackDate?: boolean;
+    relativeHumidityPct?: number;
+    humidityCached?: boolean;
   }[]
 ): ForecastTimelineSlot[] {
   const valid = entries.filter((e) => typeof e.targetTime === "string");

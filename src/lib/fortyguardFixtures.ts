@@ -8,7 +8,12 @@
 import "server-only";
 import * as turf from "@turf/turf";
 import type { Feature, Polygon } from "geojson";
-import type { HeatmapResult, HeatmapTileProperties, SatelliteSegmentationResult } from "./fortyguard";
+import type {
+  EnvParamsResult,
+  HeatmapResult,
+  HeatmapTileProperties,
+  SatelliteSegmentationResult,
+} from "./fortyguard";
 
 // Smallest-valid 1x1 transparent PNG — verified structurally (signature +
 // IHDR/IDAT/IEND chunks) before use. Stands in for real satellite imagery
@@ -197,5 +202,78 @@ export function generateCachedSatelliteResult(latitude: number, longitude: numbe
       image_legend: CACHED_IMAGE_LEGEND,
       image_content: PLACEHOLDER_IMAGE_BASE64,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// /v1/env_params fixture. Same rule as every other fixture in this file: the
+// SHAPE mirrors a real captured response, the VALUES are synthesized and must
+// never be presented as measurements — anything consuming this gets
+// `cached: true` and is required to label it.
+//
+// The humidity series is a deterministic diurnal curve (highest just before
+// dawn, lowest mid-afternoon) rather than a flat number or noise, because a
+// flat fixture would hide exactly the bug this endpoint was added to fix: code
+// that silently matches the wrong hour looks correct against constant data.
+// Amplitude is loosely modelled on the real Houston reading this was built
+// against (34%-93% across one day), so cached mode exercises the same spread
+// live mode produces.
+//
+// Timestamps are emitted in UTC. Cached mode has no way to know the AOI's real
+// timezone (the live API resolves that itself), and relativeHumidityAt()
+// matches on absolute instant, so UTC keeps the fixture self-consistent
+// instead of inventing a plausible-looking offset that would be wrong.
+// ---------------------------------------------------------------------------
+const CACHED_ENV_RH_MEAN_PCT = 60;
+const CACHED_ENV_RH_AMPLITUDE_PCT = 27;
+/** Hour of day the synthetic humidity curve peaks — just before dawn. */
+const CACHED_ENV_RH_PEAK_HOUR = 5;
+
+function cachedHourlyHumidity(hour: number): number {
+  const phase = (2 * Math.PI * (hour - CACHED_ENV_RH_PEAK_HOUR)) / 24;
+  const value = CACHED_ENV_RH_MEAN_PCT + CACHED_ENV_RH_AMPLITUDE_PCT * Math.cos(phase);
+  // Clamp into a physically sensible band, then round to the one decimal the
+  // real response uses.
+  return Math.round(Math.min(99, Math.max(5, value)) * 10) / 10;
+}
+
+export function generateCachedEnvParamsResult(params: {
+  latitude: number;
+  longitude: number;
+  temperature: number;
+  startDate: string;
+}): EnvParamsResult {
+  const hours = Array.from({ length: 24 }, (_, h) => h);
+  const timestamps = hours.map((h) => `${params.startDate}T${String(h).padStart(2, "0")}:00:00+00:00`);
+  const relativeHumidity = hours.map((h) => cachedHourlyHumidity(h));
+
+  return {
+    metadata: {
+      timezone: "UTC",
+      timezone_offset_hours: 0,
+      time_range: {
+        start: timestamps[0],
+        end: timestamps[timestamps.length - 1],
+        interval: "1h",
+        count: timestamps.length,
+      },
+      timestamps,
+    },
+    locations: [
+      {
+        lat: params.latitude,
+        lon: params.longitude,
+        elevation: 0,
+        temperature: params.temperature,
+        parameters: {
+          relative_humidity_percent: relativeHumidity,
+          // Derived from the same synthetic curve so the two fixture series
+          // stay mutually consistent — not a second, independent invention.
+          wet_bulb_temperature_celsius: relativeHumidity.map(
+            (rh) => Math.round((params.temperature - (100 - rh) / 5) * 10) / 10,
+          ),
+        },
+      },
+    ],
   };
 }

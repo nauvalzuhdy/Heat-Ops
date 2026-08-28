@@ -2,7 +2,11 @@
 // — FORTYGUARD_API_KEY must stay off the client bundle entirely.
 import "server-only";
 import type { FeatureCollection, Polygon } from "geojson";
-import { generateCachedHeatmapResult, generateCachedSatelliteResult } from "./fortyguardFixtures";
+import {
+  generateCachedHeatmapResult,
+  generateCachedSatelliteResult,
+  generateCachedEnvParamsResult,
+} from "./fortyguardFixtures";
 
 const FORTYGUARD_BASE_URL = "https://api.fortyguard.com";
 
@@ -137,6 +141,149 @@ async function pollUntilDone<TResult>(activityId: string): Promise<TResult> {
     // otherwise "Processing" — keep polling
   }
   throw new Error(`FortyGuard activity ${activityId} timed out after ${POLL_MAX_ATTEMPTS} polls`);
+}
+
+// ---------------------------------------------------------------------------
+// /v1/env_params — hourly environmental parameters at a single point.
+//
+// Added so lib/wbgt.ts can stop assuming a flat 40% relative humidity. That
+// stand-in was the single largest source of error in the Shift Schedule: at the
+// Houston Ship Channel on 2026-08-26 the real hourly humidity ran 34.2% to
+// 92.8% across one day, so the assumption was roughly right mid-afternoon and
+// badly wrong at dawn — in the direction that UNDERSTATES heat stress, which is
+// the dangerous direction for a tool that tells crews when it is safe to work.
+//
+// Contract confirmed against the live API on 2026-08-28, not assumed from docs:
+// a GET returns 405 (the endpoint exists — a non-existent path returns 404), and
+// POSTing an empty body returns a 422 naming every required field. Neither
+// probe creates an activity, so neither costs credit.
+//
+// Note the shape: `temperature` is an INPUT. The endpoint takes a temperature
+// (here, the one FortyGuard already measured for this AOI) and returns hourly
+// environmental parameters around it, so this composes with /v1/heatmap rather
+// than duplicating it. One call with filter_type 3 returns all 24 hours of a
+// day in the location's own timezone, which covers every forecast slot at once.
+// ---------------------------------------------------------------------------
+export type EnvParamsResult = {
+  metadata: {
+    timezone: string;
+    timezone_offset_hours: number;
+    time_range: { start: string; end: string; interval: string; count: number };
+    /** ISO 8601, each carrying the location's own UTC offset — one per hourly sample. */
+    timestamps: string[];
+  };
+  locations: {
+    lat: number;
+    lon: number;
+    elevation: number;
+    temperature: number;
+    /**
+     * Every entry is a 24-element hourly series aligned to `metadata.timestamps`.
+     * Only the fields HeatOps actually consumes are named; the live response also
+     * carries air-quality, CO2 and methane series, left untyped rather than
+     * half-modelled.
+     */
+    parameters: {
+      relative_humidity_percent?: number[];
+      wet_bulb_temperature_celsius?: number[];
+      heat_index_celsius?: number[];
+      apparent_temperature_celsius?: number[];
+      cloud_cover_octas?: number[];
+    };
+    solar_irradiance?: { clear_sky?: { ghi: number; dni: number; dhi: number }; description?: string };
+  }[];
+};
+
+async function submitEnvParams(params: {
+  latitude: number;
+  longitude: number;
+  temperature: number;
+  startDate: string;
+}): Promise<string> {
+  const res = await fetch(`${FORTYGUARD_BASE_URL}/v1/env_params`, {
+    method: "POST",
+    headers: { "api-key": apiKey(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      latitude: params.latitude,
+      longitude: params.longitude,
+      temperature: params.temperature,
+      // filter_type 3 (whole day) — same meaning as /v1/heatmap's, and the
+      // reason one call covers every forecast slot.
+      date_time: { start_date: params.startDate, filter_type: 3 },
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`FortyGuard /v1/env_params submit failed: ${res.status} ${await res.text()}`);
+  }
+
+  const body: SubmitResponse = await res.json();
+  if (body.error || !body.data?.activity_id) {
+    throw new Error(`FortyGuard /v1/env_params submit rejected: ${body.message}`);
+  }
+  return body.data.activity_id;
+}
+
+export async function runEnvParams(params: {
+  latitude: number;
+  longitude: number;
+  temperature: number;
+  startDate: string;
+}): Promise<{ cached: boolean; result: EnvParamsResult }> {
+  if (isCachedMode()) {
+    console.log("[FortyGuard] CACHED mode — returning synthetic env_params, no credit spent");
+    return { cached: true, result: generateCachedEnvParamsResult(params) };
+  }
+
+  logMode("/v1/env_params");
+  const activityId = await submitEnvParams(params);
+  try {
+    const result = await pollUntilDone<EnvParamsResult>(activityId);
+    return { cached: false, result };
+  } catch (err) {
+    console.error(`FortyGuard env_params activity_id=${activityId} error:`, err);
+    throw err;
+  }
+}
+
+/**
+ * Relative humidity (%) at the hourly sample nearest `targetTimeIso`, or null
+ * when the response carries no humidity series or no timestamp within an hour
+ * of the target.
+ *
+ * Matched on absolute instant, never on clock-face hour: `metadata.timestamps`
+ * are in the LOCATION's timezone (GMT-6 for the Texas AOI this was built
+ * against) while a forecast slot's `targetTime` is UTC. Comparing the two as
+ * strings, or by getHours(), would silently pick a reading several hours off —
+ * which for a diurnal humidity curve is the difference between 34% and 92%.
+ *
+ * The one-hour tolerance keeps a target outside the returned day (e.g. a slot
+ * that crosses midnight into a day this response does not cover) from silently
+ * snapping to that day's first or last sample.
+ */
+export function relativeHumidityAt(result: EnvParamsResult, targetTimeIso: string): number | null {
+  const series = result.locations?.[0]?.parameters?.relative_humidity_percent;
+  const stamps = result.metadata?.timestamps;
+  if (!series?.length || !stamps?.length) return null;
+
+  const targetMs = new Date(targetTimeIso).getTime();
+  if (!Number.isFinite(targetMs)) return null;
+
+  let bestIndex = -1;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < Math.min(stamps.length, series.length); i++) {
+    const ms = new Date(stamps[i]).getTime();
+    if (!Number.isFinite(ms)) continue;
+    const delta = Math.abs(ms - targetMs);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestIndex = i;
+    }
+  }
+
+  if (bestIndex < 0 || bestDelta > 3_600_000) return null;
+  const value = series[bestIndex];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export async function runSatelliteSegmentation(params: {

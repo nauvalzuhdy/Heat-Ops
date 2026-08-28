@@ -32,6 +32,7 @@ import {
   overallShiftRisk,
   SHIFT_RISK_RECOMMENDATION,
   ASSUMED_RELATIVE_HUMIDITY_PCT,
+  summarizeHumidityProvenance,
   WORKLOAD_LABEL,
   ACCLIMATIZATION_LABEL,
   type ShiftRisk,
@@ -701,6 +702,7 @@ function ShiftScheduleSection({ timeline }: { timeline: SiteReportData["shiftTim
     (s): s is Extract<ForecastTimelineSlot, { available: true }> => s.available,
   );
   const overall = overallShiftRisk(available.map((s) => s.risk));
+  const humidity = summarizeHumidityProvenance(timeline);
 
   // The table below has no date column (only clock times), so on a fallback
   // day the banner must name the actual measurement date outright — otherwise
@@ -755,10 +757,21 @@ function ShiftScheduleSection({ timeline }: { timeline: SiteReportData["shiftTim
           </View>
         ))}
       </View>
+      {/* Mirrors the dashboard's own humidity provenance wording: the report must
+          not describe a flat assumption for a site whose slots used FortyGuard's
+          measured hourly humidity, nor claim a measurement for one that did not. */}
       <Text style={styles.caveat}>
-        WBGT is estimated (not directly measured) from air temperature using an assumed{" "}
-        {ASSUMED_RELATIVE_HUMIDITY_PCT}% relative humidity. Risk bands use NIOSH&apos;s 2016 Recommended Exposure
-        Limits for {WORKLOAD_LABEL.toLowerCase()} work, {ACCLIMATIZATION_LABEL.toLowerCase()}.
+        {humidity.measuredCount > 0
+          ? `WBGT is derived (not directly measured) from FortyGuard air temperature and FortyGuard's measured ` +
+            `relative humidity for each slot's own hour` +
+            (humidity.assumedCount > 0
+              ? ` for ${humidity.measuredCount} of ${humidity.measuredCount + humidity.assumedCount} slots; the rest use an assumed ${ASSUMED_RELATIVE_HUMIDITY_PCT}%.`
+              : `.`)
+          : humidity.cachedCount > 0
+            ? `Humidity for this site came from cached-mode fixtures, not a live FortyGuard call — those values are synthetic, not measurements.`
+            : `WBGT is estimated (not directly measured) from air temperature using an assumed ${ASSUMED_RELATIVE_HUMIDITY_PCT}% relative humidity.`}
+        {" "}Risk bands use NIOSH&apos;s 2016 Recommended Exposure Limits for {WORKLOAD_LABEL.toLowerCase()} work,{" "}
+        {ACCLIMATIZATION_LABEL.toLowerCase()}.
       </Text>
     </View>
   );

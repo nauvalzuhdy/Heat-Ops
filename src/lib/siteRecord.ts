@@ -61,6 +61,18 @@ export type HeatForecastEntry = {
   // fallback entry as what it is, never show it as today's forecast.
   dateUsed: string;
   isFallbackDate: boolean;
+  /**
+   * Relative humidity (%) measured by FortyGuard's /v1/env_params at THIS slot's
+   * own hour, attached server-side when the forecast is persisted
+   * (app/api/sites/route.ts). Optional on purpose: every site saved before this
+   * existed has no humidity, and jsonb needs no migration for a new key — those
+   * rows keep working and fall back to lib/wbgt.ts's assumed value, labelled as
+   * assumed. Absent also when the env_params call failed or returned no reading
+   * for the hour; never back-filled with a guess.
+   */
+  relativeHumidityPct?: number;
+  /** True when relativeHumidityPct came from cached-mode fixtures rather than a live call. */
+  humidityCached?: boolean;
 };
 
 export type SiteLandcover = {

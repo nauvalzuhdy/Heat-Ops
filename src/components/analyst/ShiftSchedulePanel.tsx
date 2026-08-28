@@ -47,8 +47,9 @@ import {
   WORKLOAD_LABEL,
   ACCLIMATIZATION_LABEL,
   SHIFT_RISK_RECOMMENDATION,
-  SHIFT_SCHEDULE_SHORT_ASSUMPTION_TEXT,
-  SHIFT_SCHEDULE_METHODOLOGY_BULLETS,
+  summarizeHumidityProvenance,
+  shiftShortAssumptionText,
+  buildShiftMethodologyBullets,
   type ForecastTimelineSlot,
   type ShiftRisk,
 } from "@/lib/wbgt";
@@ -385,6 +386,10 @@ export default function ShiftSchedulePanel({
   const verdictHeadline = buildVerdictHeadline(nowRisk, improvementTimeLabel);
   const laterWorseSlot = findLaterWorseSlot(available, heroSlot);
   const heroPhotoUrl = satellitePhotoUrl ?? heatPhotoUrl ?? null;
+  // Whether this specific site's slots used FortyGuard-measured humidity, all
+  // assumed, or a mix — drives the humidity card's label and the methodology
+  // text below, so neither ever claims a measurement a slot did not have.
+  const humiditySummary = summarizeHumidityProvenance(timeline);
 
   return (
     <div className="flex flex-col gap-4">
@@ -443,11 +448,29 @@ export default function ShiftSchedulePanel({
               value={heroSlot ? `${heroSlot.wbgtC.toFixed(1)}°C` : "—"}
               sub="Estimated"
             />
+            {/* Humidity is no longer a single global assumption: FortyGuard's
+                /v1/env_params supplies a real per-hour reading, so this card shows
+                the value THIS slot actually used and says which kind it is. It
+                still falls back to the assumption — and still says so — for sites
+                saved before that existed, or hours with no reading. */}
             <HeroStatCard
               label="Humidity"
-              info="Not measured for this site. A fixed 40% relative-humidity assumption is used across all sites — see 'How this is calculated' below."
-              value={`${ASSUMED_RELATIVE_HUMIDITY_PCT}% RH`}
-              sub="Assumed"
+              info={
+                heroSlot?.humidityProvenance === "MEASURED"
+                  ? "Measured by FortyGuard (/v1/env_params) for this slot's own hour, not assumed — see 'How this is calculated' below."
+                  : heroSlot?.humidityProvenance === "CACHED"
+                    ? "Cached-mode fixture value, not a measurement — re-analyze this site in live mode for real humidity."
+                    : "No measured humidity is stored for this slot, so a fixed " +
+                      `${ASSUMED_RELATIVE_HUMIDITY_PCT}% relative-humidity assumption is used — see 'How this is calculated' below.`
+              }
+              value={`${(heroSlot?.relativeHumidityPct ?? ASSUMED_RELATIVE_HUMIDITY_PCT).toFixed(0)}% RH`}
+              sub={
+                heroSlot?.humidityProvenance === "MEASURED"
+                  ? "FortyGuard — Measured"
+                  : heroSlot?.humidityProvenance === "CACHED"
+                    ? "FortyGuard — Cached"
+                    : "Assumed"
+              }
             />
             <HeroStatCard
               label="Workload"
@@ -605,9 +628,9 @@ export default function ShiftSchedulePanel({
           How this is calculated
         </summary>
         <div className="mt-2 flex flex-col gap-2">
-          <p className="leading-relaxed">{SHIFT_SCHEDULE_SHORT_ASSUMPTION_TEXT}</p>
+          <p className="leading-relaxed">{shiftShortAssumptionText(humiditySummary)}</p>
           <ul className="list-disc space-y-1 pl-4 leading-relaxed">
-            {SHIFT_SCHEDULE_METHODOLOGY_BULLETS.map((bullet) => (
+            {buildShiftMethodologyBullets(humiditySummary).map((bullet) => (
               <li key={bullet}>{bullet}</li>
             ))}
           </ul>
