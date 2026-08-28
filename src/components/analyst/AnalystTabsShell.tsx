@@ -55,15 +55,16 @@ export default function AnalystTabsShell({
         />
       </div>
 
-      {/* `main` (app/analyst/page.tsx) owns px-6 padding (no pb — see its
-          comment for why) — this -mx-6 cancels just the horizontal half so
+      {/* `main` (app/analyst/page.tsx) owns its horizontal padding (px-4 on
+          phones, px-6 from `sm` up; no pb — see its comment for why) — this
+          matching -mx-4 sm:-mx-6 cancels just the horizontal half so
           the bar reads full-width; no -mb-5 needed since main has no bottom
           padding left to cancel, and a negative bottom margin here would
           make this bar's real box poke out past its h-full parent's edge
           instead of actually saving space. No longer `sticky` either: the
           page no longer scrolls, so a plain flex-col bottom item stays put
           on its own. */}
-      <div className="-mx-6 shrink-0 border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
+      <div className="-mx-4 shrink-0 border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950 sm:-mx-6">
         <IconToolbar
           tabs={tabs}
           activeTab={activeTab}

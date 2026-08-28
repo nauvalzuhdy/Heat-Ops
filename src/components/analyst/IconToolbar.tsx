@@ -19,7 +19,17 @@ export default function IconToolbar({
   onChange: (key: TabKey) => void;
 }) {
   return (
-    <nav className="flex shrink-0 items-center justify-center gap-1 overflow-x-auto border-t border-neutral-200 bg-white px-2 py-2 dark:border-neutral-800 dark:bg-neutral-950">
+    // The scroll container and the centering are deliberately two separate
+    // elements. `justify-center` directly on an `overflow-x-auto` flex row
+    // is a trap at phone widths: once the tabs are collectively wider than
+    // the screen, centering pushes the first tab off the *left* edge into
+    // the container's unreachable negative scroll area, so "Overview" can
+    // never be scrolled back to. An inner `w-max` row with `mx-auto`
+    // centers while the tabs fit, and degrades to left-aligned +
+    // scrollable (every tab reachable) when they do not, because auto
+    // margins on an over-wide box resolve to 0.
+    <nav className="shrink-0 overflow-x-auto border-t border-neutral-200 bg-white px-2 py-2 dark:border-neutral-800 dark:bg-neutral-950">
+      <div className="mx-auto flex w-max items-center gap-1">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const isActive = tab.key === activeTab;
@@ -55,6 +65,7 @@ export default function IconToolbar({
           </div>
         );
       })}
+      </div>
     </nav>
   );
 }

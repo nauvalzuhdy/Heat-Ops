@@ -27,7 +27,10 @@ async function fetchSite(
   const { data, error } = await supabase
     .from("sites")
     .select(
-      "id, name, created_at, aoi_geometry, site_area_m2, landcover, landcover_spotcheck, heat_tiles, heat_stats, heat_forecast, heat_photo_url, satellite_photo_url, attribution",
+      // roi_inputs is read here (not just by RoiPanel's own fetch) so the
+      // Overview tab's headline outcome banner can state the operator's saved
+      // scenario — the same one lib/reportData.ts feeds the PDF report.
+      "id, name, created_at, aoi_geometry, site_area_m2, landcover, landcover_spotcheck, heat_tiles, heat_stats, heat_forecast, heat_photo_url, satellite_photo_url, attribution, roi_inputs",
     )
     .eq("id", siteId)
     .maybeSingle();
@@ -189,7 +192,7 @@ export default function AnalystPage({
   const siteId = searchParams.siteId;
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden">
+    <div className="flex h-app-shell w-full flex-col overflow-hidden">
       <Header title="Operational Analyst" />
       <div className="flex flex-1 overflow-hidden">
         <AppSidebar />
@@ -208,8 +211,18 @@ export default function AnalystPage({
             space, producing exactly the kind of scroll this fix removes.
             Omitting the padding here (and the matching -mb-5 there) gets the
             same flush-bottom look without that mismatch. */}
-        <main className="flex flex-1 flex-col overflow-hidden px-6 pt-5">
-          <div className="mb-4 flex shrink-0 items-center justify-between">
+        {/* Padding is tighter below `sm` so a phone spends its (much
+            scarcer) width and height on content rather than chrome -
+            AnalystTabsShell's edge-to-edge toolbar bleeds by the matching
+            -mx-4 sm:-mx-6. */}
+        <main className="flex flex-1 flex-col overflow-hidden px-4 pt-4 sm:px-6 sm:pt-5">
+          {/* flex-wrap + gap: on a phone these nav buttons no longer squeeze
+              the heading (or wrap their own label text over 2-3 lines each,
+              which quietly ate ~60px of the vertical budget the tab content
+              and the bottom toolbar need). They drop to their own line
+              instead, with short labels at that size - see the paired spans
+              below. */}
+          <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2 sm:mb-4">
             <h1 className="text-sm font-semibold text-neutral-900 dark:text-white">
               Operational Analyst
             </h1>
@@ -220,16 +233,17 @@ export default function AnalystPage({
               {siteId && (
                 <Link
                   href="/analyst"
-                  className="rounded-lg border border-neutral-200 px-4 py-2 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
+                  className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900 sm:px-4 sm:py-2"
                 >
                   ← Saved Sites
                 </Link>
               )}
               <Link
                 href="/map"
-                className="rounded-lg border border-neutral-200 px-4 py-2 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
+                className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900 sm:px-4 sm:py-2"
               >
-                ← Back to Map View
+                <span className="sm:hidden">← Map</span>
+                <span className="hidden sm:inline">← Back to Map View</span>
               </Link>
             </div>
           </div>

@@ -403,7 +403,7 @@ export default function CopilotChat({ siteId }: { siteId: string | null }) {
         />
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-1 py-1">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 py-1">
         {messages.length === 0 ? (
           <EmptyState
             siteId={siteId}

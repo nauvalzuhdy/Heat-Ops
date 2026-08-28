@@ -38,6 +38,7 @@ import {
   type ForecastTimelineSlot,
 } from "../wbgt";
 import type { ROIResult } from "../roiSimulator";
+import { formatOutcomeSegments } from "../siteOutcome";
 import type { SiteReportData } from "../reportData";
 
 // Mirrors components/analyst/AttributionBadge.tsx's exact vocabulary
@@ -60,6 +61,12 @@ const COLORS = {
   surface: "#FFFFFF",
   accent: "#6E8F2A", // --accent (light)
   accentStrong: "#5C7A21", // --accent-strong (light)
+  // --accent-soft-bg (light) is rgba(110, 143, 42, 0.10); flattened here to
+  // the opaque hex it composites to over white. react-pdf can render rgba,
+  // but a translucent fill is at the mercy of whatever a PDF viewer or
+  // printer does with transparency — an opaque value prints identically
+  // everywhere, and this band must stay legible on paper.
+  accentSoftBg: "#F3F6E9",
   // --status-real/cached/unavailable (light) — the same provenance concept
   // AttributionBadge.tsx renders on screen, reused here rather than a
   // separate print palette.
@@ -139,6 +146,34 @@ const styles = StyleSheet.create({
   sectionRule: { height: 1, backgroundColor: COLORS.borderSubtle, marginTop: 8, marginBottom: 10 },
 
   // --- Executive-summary stat cards ---------------------------------------
+  // Headline outcome band — the report's single quotable sentence, sitting
+  // above the four Executive Summary stat cards. Left accent rule + tinted
+  // ground so it reads as a pull-quote, not a fifth stat card.
+  outcomeBand: {
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.accentStrong,
+    backgroundColor: COLORS.accentSoftBg,
+    padding: 10,
+    marginBottom: 12,
+  },
+  outcomeEyebrow: {
+    fontSize: 7.5,
+    fontWeight: 700,
+    color: COLORS.accentStrong,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: 5,
+  },
+  outcomeNowText: { fontSize: 9.5, lineHeight: 1.4, color: COLORS.ink, marginBottom: 8 },
+  outcomeProvenance: { fontSize: 7.5, color: COLORS.statusCached, marginBottom: 6 },
+  outcomeSplitRow: { flexDirection: "row", alignItems: "flex-end", gap: 14 },
+  outcomeCol: { flex: 1 },
+  outcomeLabel: { fontSize: 7.5, color: COLORS.inkMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 },
+  outcomeAction: { fontSize: 9.5, fontWeight: 700, color: COLORS.ink },
+  outcomeDelta: { fontSize: 20, fontWeight: 700, color: COLORS.accentStrong },
+  outcomeEconomics: { fontSize: 8.5, color: COLORS.inkSecondary, marginTop: 6 },
   executiveRow: { flexDirection: "row", gap: 12 },
   statCard: { flex: 1, borderWidth: 1, borderColor: COLORS.borderSubtle, borderTopWidth: 3, borderTopColor: COLORS.accent, padding: 10 },
   statLabel: { fontSize: 7.5, color: COLORS.inkMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
@@ -925,6 +960,61 @@ function CoverPage({ site, generatedAt }: { site: SiteReportData["site"]; genera
   );
 }
 
+// The report's headline sentence. Every string comes from
+// lib/siteOutcome.ts's formatOutcomeSegments(), the same call
+// components/analyst/OutcomeBanner.tsx makes — so the printed report and
+// the dashboard state the same outcome in the same words, not merely from
+// the same numbers. No Fragments here: every branch returns a real View, so
+// react-pdf's layout engine never has to flatten one.
+function OutcomeBand({ outcome }: { outcome: SiteReportData["outcome"] }) {
+  const segments = formatOutcomeSegments(outcome);
+  const hasAction = segments.action != null && segments.delta != null;
+  const { provenance } = outcome;
+  const provenanceNotes: string[] = [];
+  if (provenance.heatSynthetic) provenanceNotes.push("heat figures are cached/synthetic, not live measurements");
+  if (provenance.canopySynthetic) provenanceNotes.push("tree-canopy share is from a cached spot-check");
+
+  return (
+    <View style={styles.outcomeBand} wrap={false}>
+      <Text style={styles.outcomeEyebrow}>Headline Outcome — Estimate</Text>
+      <Text style={styles.outcomeNowText}>
+        {segments.exposure ? `${segments.now} · ${segments.exposure}.` : `${segments.now}.`}
+      </Text>
+      {provenanceNotes.length > 0 && (
+        <Text style={styles.outcomeProvenance}>Note: {provenanceNotes.join("; ")}.</Text>
+      )}
+      {hasAction && (
+        <View>
+          <View style={styles.outcomeSplitRow}>
+            <View style={styles.outcomeCol}>
+              <Text style={styles.outcomeLabel}>
+                {outcome.intervention.status === "available" && outcome.intervention.isSavedScenario
+                  ? "With the saved scenario"
+                  : "With the recommended action"}
+              </Text>
+              <Text style={styles.outcomeAction}>{segments.action}</Text>
+            </View>
+            <View style={styles.outcomeCol}>
+              <Text style={styles.outcomeLabel}>Estimated cooling</Text>
+              <Text style={styles.outcomeDelta}>{segments.delta}</Text>
+            </View>
+          </View>
+          <Text style={styles.outcomeEconomics}>{segments.economics}</Text>
+          <Text style={styles.caveat}>
+            Cooling is estimated from published canopy-cover research indexed to how much canopy this scenario
+            adds; energy and payback use the disclosed planning-grade assumptions in Section 6. This is a
+            planning estimate for this site, not a measured or guaranteed result.
+            {outcome.intervention.status === "available" &&
+              outcome.intervention.beyondValidatedRange &&
+              " This scenario adds more canopy than the source studies tested, so its cooling figure is a linear extrapolation beyond validated range."}
+          </Text>
+        </View>
+      )}
+      {!hasAction && <Text style={styles.bodyText}>{segments.interventionNote}</Text>}
+    </View>
+  );
+}
+
 function PageHeader({ siteName }: { siteName: string }) {
   return (
     <View style={styles.pageHeader} fixed>
@@ -960,7 +1050,7 @@ export default function SiteReportDocument({
   generatedAt: string;
   satellitePhotoBuffer: Buffer | null;
 }) {
-  const { site, hotspotZones, recommendation, heatGrid, shiftTimeline, roi } = data;
+  const { site, hotspotZones, recommendation, heatGrid, shiftTimeline, roi, outcome } = data;
   const hottest = hotspotZones.find((z) => z.isHottest);
   const siteName = site.name ?? `Site ${site.id.slice(0, 8)}`;
 
@@ -985,6 +1075,11 @@ export default function SiteReportDocument({
               </Text>
             </View>
           )}
+          {/* Above the stat cards deliberately: the four cards below are
+              inputs, this is the conclusion drawn from them. A reader who
+              only ever looks at page 1 should still leave with the outcome. */}
+          <OutcomeBand outcome={outcome} />
+
           <View style={styles.executiveRow}>
             <View style={styles.statCard}>
               <Text style={styles.statLabel}>Mean Temp</Text>

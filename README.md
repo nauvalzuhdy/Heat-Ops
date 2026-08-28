@@ -3,6 +3,8 @@
 **Heat-aware site intelligence for industrial operations.**
 Built for **FortyGuard Hackathon'26**.
 
+**Live demo:** <https://heat-ops-snowy.vercel.app>
+
 Draw an area on the map, and HeatOps pulls real surface-temperature data from FortyGuard, land cover from OpenStreetMap, and satellite imagery from Esri — then turns it into hotspot detection, worker shift-safety guidance, a cooling-investment simulation, and a PDF report. An AI Copilot sits on top of the same saved data so you can ask questions in plain language.
 
 ---
@@ -17,6 +19,8 @@ Draw an area on the map, and HeatOps pulls real surface-temperature data from Fo
 - [Project structure](#project-structure)
 - [API routes](#api-routes)
 - [Working with the FortyGuard API](#working-with-the-fortyguard-api)
+- [A real API request and response](#a-real-api-request-and-response)
+- [What doesn't work yet](#what-doesnt-work-yet)
 - [Data honesty rules](#data-honesty-rules)
 
 ---
@@ -233,6 +237,159 @@ Behaviours worth knowing before you debug something that isn't actually broken. 
 **Some fields come back spatially uniform.** For certain AOIs and dates every tile carries an identical temperature, so min = mean = max and the heatmap renders flat. The reading is real, just without spatial detail — larger AOIs generally return more. `isSpatiallyUniform()` detects this so the UI can say so.
 
 **Granularity** is `60 | 80 | 100` metres, chosen from AOI area by `pickGranularity()` to keep tile counts useful. All three are valid; none of them causes the empty-result case.
+
+---
+
+## A real API request and response
+
+A genuine, unmodified `/v1/heatmap` exchange — captured 28 August 2026 against an AOI
+covering the Houston Ship Channel industrial corridor (Pasadena / Deer Park, Texas),
+roughly 51 km². This is exactly the request body `lib/fortyguard.ts` builds.
+
+### 1. Submit — `POST https://api.fortyguard.com/v1/heatmap`
+
+Headers: `api-key: <your key>`, `Content-Type: application/json`
+
+```json
+{
+  "polygon_aoi": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[
+            [-95.16, 29.69], [-95.08, 29.69], [-95.08, 29.75],
+            [-95.16, 29.75], [-95.16, 29.69]
+          ]]
+        }
+      }
+    ]
+  },
+  "date_time": { "start_date": "2026-08-26", "filter_type": 3 },
+  "granularity": 100
+}
+```
+
+Response:
+
+```json
+{
+  "error": false,
+  "status_code": 200,
+  "message": "Heatmap Submitted Successfully",
+  "data": { "activity_id": "67ee28fa-9afc-4d19-965d-536f1c590989" }
+}
+```
+
+### 2. Poll — `GET https://api.fortyguard.com/v1/status/{activity_id}`
+
+Returned `"status": "Processing"` at +3s and +6s, then `"Completed"` at +12s — the
+3s → 6s → 12s backoff the client uses. The completed payload was 1.88 MB containing
+**4,835 tiles**; `map_data.features` and the distribution arrays are truncated below
+for readability. Everything else is verbatim.
+
+```json
+{
+  "error": false,
+  "status_code": 200,
+  "message": "Completed",
+  "data": {
+    "activity_id": "67ee28fa-9afc-4d19-965d-536f1c590989",
+    "status": "Completed",
+    "result": {
+      "map_data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "id": "0",
+            "type": "Feature",
+            "properties": {
+              "tile_id": 0,
+              "average_temperature": 31.8584,
+              "min_temperature": 26.7176,
+              "max_temperature": 37.2593
+            },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [[
+                [-95.10156227482021, 29.689555139378445],
+                [-95.10052487916587, 29.689571598494993],
+                [-95.10054354954454, 29.690468937035096],
+                [-95.10158095440318, 29.690452477322435],
+                [-95.10156227482021, 29.689555139378445]
+              ]]
+            }
+          }
+        ]
+      },
+      "stats_data": {
+        "temperature_stats": {
+          "minimum": 31.3941,
+          "maximum": 33.3298,
+          "mean": 32.40325288521199,
+          "standard_deviation": 0.4193647578883087
+        },
+        "overall_temperature_distribution": [31.3941, 32.33045, 32.4547, 32.5387, 33.3298],
+        "normal_temperature_distribution": {
+          "x_axis": [31.145158611547064, 31.17057465747969, 31.195990703412313],
+          "y_axis": [0.010568003935891844, 0.012651965444127151, 0.015091340675480146]
+        },
+        "temperature_frequency": {
+          "x_axis": [32.0, 33.0, 31.0],
+          "y_axis": [3262, 1517, 56]
+        }
+      }
+    }
+  }
+}
+```
+
+Two things worth noting against the published docs: `stats_data` keys come back
+lowercase snake_case (`temperature_stats.minimum`), not the capitalized
+`Temperature_stats.Minimum` the prose describes; and each feature carries a
+top-level `"id"` alongside `properties.tile_id`.
+
+Binning these 4,835 tiles into HeatOps’ 3×3 zone grid puts the hottest zone in the
+**Northeast** (mean 32.91 °C), with the single hottest tile at 33.33 °C near
+29.7464, -95.1105 — the Ship Channel itself.
+
+---
+
+## What doesn’t work yet
+
+Honest limitations, so you know what you’re looking at.
+
+- **No authentication or multi-tenancy.** Every visitor sees — and can delete — every
+  saved site. The server uses Supabase’s service-role key and bypasses RLS. This is the
+  first thing that needs to change before real use.
+- **United States only.** AOIs outside the US return no data — a FortyGuard coverage
+  constraint, not a product choice.
+- **Same-day heat data is often unavailable.** FortyGuard’s availability lag is variable,
+  so an analysis run today usually falls back to an earlier date. The app handles this and
+  always names the date it actually used, but “today’s reading” is frequently not
+  obtainable.
+- **Some AOIs return a spatially uniform field.** Every tile carries the same temperature,
+  so the heatmap renders flat. The reading is real, just without spatial detail. Larger
+  AOIs generally return more.
+- **Tree canopy comes from a single centroid spot-check**, not an AOI-wide segmentation,
+  and for some sites FortyGuard returns no distinct “Tree” class at all — those sites get
+  no canopy recommendation rather than a guessed one.
+- **The ROI model is planning-grade, not an energy audit.** The kWh-per-m²-per-°C figure is
+  derived, not directly measured, and the canopy-to-cooling range comes from studies that
+  tested up to ~30 percentage points of canopy change; scenarios beyond that are flagged
+  as extrapolation.
+- **WBGT is estimated, not measured.** There is no humidity, wind, or radiant-heat input;
+  relative humidity is assumed at a fixed 40%. Risk bands are a NIOSH-based screening
+  estimate, not a certified individual safety assessment.
+- **Saved sites are capped at 60** and not paginated.
+- **Mobile and tablet layouts are newly fixed and lightly tested** — the app is built for a
+  desktop operator workflow.
+- **The AI Copilot needs a DeepSeek key.** Without one the dashboard still works fully; the
+  chat and the PDF’s narrative section degrade to an explicit “unavailable” message rather
+  than failing.
 
 ---
 

@@ -5,6 +5,7 @@
 // toolbar (OverviewPanel, HotspotPanel, and Sub-task 3+'s panels) can import
 // the same type without importing a page.tsx module.
 import type { HeatForecastEntry, SiteRecord } from "@/lib/siteRecord";
+import type { ROIInputs } from "@/lib/roiSimulator";
 
 // Shift Schedule's per-slot display shape (`ForecastTimelineSlot`, including
 // its own dateLabel/timeLabel formatting rationale) lives in lib/wbgt.ts
@@ -25,4 +26,14 @@ export type SiteRow = {
   heat_photo_url: string | null;
   satellite_photo_url: string | null;
   attribution: SiteRecord["attribution"] | null;
+  /**
+   * The operator's saved Heat Mitigation Planner scenario, or null if they
+   * have not customized one yet. Selected on the Overview path — not only
+   * RoiPanel's own /api/sites/[id]/roi fetch — so the headline outcome
+   * banner states the SAME scenario the PDF report does
+   * (lib/reportData.ts seeds its RoiSnapshot from this column too). Without
+   * it the banner would silently fall back to the recommendation default and
+   * disagree with the report for any site whose scenario was edited.
+   */
+  roi_inputs: ROIInputs | null;
 };

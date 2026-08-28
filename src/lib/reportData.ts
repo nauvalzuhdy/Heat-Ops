@@ -11,11 +11,8 @@ import type { Polygon } from "geojson";
 import { getSupabaseServiceClient } from "./supabaseServer";
 import { chatCompletion, type ChatMessage } from "./deepseek";
 import { binTilesToZones, zoneLabel, type HotspotZone } from "./heatmapUtils";
-import {
-  buildHeatMitigationRecommendation,
-  CANOPY_AREA_PER_TREE_M2,
-  type HeatMitigationRecommendation,
-} from "./heatMitigationRecommendation";
+import { CANOPY_AREA_PER_TREE_M2, type HeatMitigationRecommendation } from "./heatMitigationRecommendation";
+import { buildSiteOutcome, type SiteOutcome } from "./siteOutcome";
 import { computeHotspotGridCells, type HotspotGridCells } from "./hotspotGridCells";
 import {
   simulateROI,
@@ -151,6 +148,13 @@ export type SiteReportData = {
   // possibly-shorter derivation.
   shiftTimeline: ForecastTimelineSlot[];
   roi: RoiSnapshot;
+  // The headline "measured now — recommended action — estimated delta"
+  // summary, from lib/siteOutcome.ts — the SAME module (and therefore the
+  // same wording, not just the same numbers) the Operational Analyst
+  // Overview tab's banner renders. Carried on the report data rather than
+  // recomputed inside the PDF component so the AI Copilot's generate_report
+  // tool, which serializes this same object, quotes the identical headline.
+  outcome: SiteOutcome;
 };
 
 export async function buildReportData(siteId: string): Promise<SiteReportData | { error: string }> {
@@ -173,15 +177,25 @@ export async function buildReportData(siteId: string): Promise<SiteReportData | 
   const heatGrid =
     row.heat_tiles && row.heat_tiles.length > 0 && bbox ? computeHotspotGridCells(row.heat_tiles, bbox) : null;
 
-  const recommendation = buildHeatMitigationRecommendation({
+  const shiftTimeline = buildForecastTimeline(row.heat_forecast ?? []);
+
+  // buildSiteOutcome() runs the recommendation engine itself and returns it
+  // on `.recommendation`, so this is one engine run shared by the report's
+  // Recommendation section, its ROI seeding below, and the headline — not
+  // three separate invocations that could, in principle, be fed different
+  // inputs.
+  const outcome = buildSiteOutcome({
     siteAreaM2: row.site_area_m2,
     landcover: row.landcover,
     landcoverSpotcheck: row.landcover_spotcheck,
     heatTiles: row.heat_tiles,
+    heatStats: row.heat_stats,
+    attribution: row.attribution,
     bbox,
+    forecastTimeline: shiftTimeline,
+    savedRoiInputs: row.roi_inputs,
   });
-
-  const shiftTimeline = buildForecastTimeline(row.heat_forecast ?? []);
+  const recommendation = outcome.recommendation;
 
   // ROI snapshot — identical fallback + best/worst-case logic to
   // RoiPanel.tsx's own useEffect load handler and live recompute, not a
@@ -228,6 +242,7 @@ export async function buildReportData(siteId: string): Promise<SiteReportData | 
     heatGrid,
     shiftTimeline,
     roi,
+    outcome,
   };
 }
 

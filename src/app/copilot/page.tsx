@@ -155,35 +155,41 @@ export default function CopilotPage({ searchParams }: { searchParams: { siteId?:
   const mode: "site" | "all" = searchParams.mode === "all" ? "all" : "site";
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden">
+    <div className="flex h-app-shell w-full flex-col overflow-hidden">
       <Header title="AI Copilot" />
       <div className="flex flex-1 overflow-hidden">
         <AppSidebar />
-        <main className="flex flex-1 flex-col overflow-hidden px-6 pt-5">
-          <div className="mb-2.5 flex shrink-0 items-center justify-between">
+        {/* Tighter padding below `sm` and a wrapping nav row, same reasoning
+            as app/analyst/page.tsx: on a phone these long-labelled buttons
+            otherwise wrapped their own text over several lines each, which
+            pushed the chat's input box off the bottom of the screen. */}
+        <main className="flex flex-1 flex-col overflow-hidden px-4 pt-4 sm:px-6 sm:pt-5">
+          <div className="mb-2.5 flex shrink-0 flex-wrap items-center justify-between gap-2">
             <h1 className="text-sm font-semibold text-neutral-900 dark:text-white">AI Copilot</h1>
             <div className="flex items-center gap-2">
               {siteId && (
                 <>
                   <Link
                     href="/copilot?mode=all"
-                    className="rounded-lg border border-neutral-200 px-4 py-2 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
+                    className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900 sm:px-4 sm:py-2"
                   >
                     ← All sites
                   </Link>
                   <Link
                     href="/copilot"
-                    className="rounded-lg border border-neutral-200 px-4 py-2 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
+                    className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900 sm:px-4 sm:py-2"
                   >
-                    ← Choose a different site
+                    <span className="sm:hidden">← Change site</span>
+                    <span className="hidden sm:inline">← Choose a different site</span>
                   </Link>
                 </>
               )}
               <Link
                 href="/analyst"
-                className="rounded-lg border border-neutral-200 px-4 py-2 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
+                className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900 sm:px-4 sm:py-2"
               >
-                ← Back to Operational Analyst
+                <span className="sm:hidden">← Analyst</span>
+                <span className="hidden sm:inline">← Back to Operational Analyst</span>
               </Link>
             </div>
           </div>

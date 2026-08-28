@@ -131,6 +131,22 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+
+  /* App-shell height (mobile/tablet fix). Tailwind's `h-screen` is 100vh,
+     and on phones/tablets 100vh means "the viewport as if the browser's URL
+     bar were hidden" - so a 100vh-tall app shell is taller than what's
+     actually visible on first load, and anything docked at its bottom edge
+     starts life underneath the browser chrome. That is exactly what hid
+     Operational Analyst's bottom icon toolbar (Overview / Hotspot / Shift /
+     ...) and AI Copilot's chat input box until the user scrolled to collapse
+     the bar. `dvh` is the dynamic viewport height - the currently visible
+     one - so the bottom bar is on screen immediately; the plain `vh`
+     declaration stays underneath it as the fallback for browsers without
+     dvh support. */
+  .h-app-shell {
+    height: 100vh;
+    height: 100dvh;
+  }
 }
 
 /* MapLibre's compact attribution control (components/map/MapCanvas.tsx)

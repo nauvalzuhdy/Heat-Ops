@@ -59,7 +59,8 @@ import GlowCard from "@/components/ui/GlowCard";
 import { LANDCOVER_COLORS, type LandcoverCategory } from "@/lib/landcoverColors";
 import { classifyLevel, isSpatiallyUniform } from "@/lib/heatmapUtils";
 import { formatFallbackDateLabel } from "@/lib/relativeTime";
-import { buildHeatMitigationRecommendation } from "@/lib/heatMitigationRecommendation";
+import { buildSiteOutcome } from "@/lib/siteOutcome";
+import OutcomeBanner from "./OutcomeBanner";
 import { type Severity } from "@/lib/severity";
 import type { ForecastTimelineSlot } from "@/lib/wbgt";
 import type { SiteRow } from "./types";
@@ -236,17 +237,24 @@ export default function OverviewPanel({
     .sort((a, b) => a.offsetHours - b.offsetHours);
   const forecastTemps = availableForecast.map((f) => f.airTemperatureC);
 
-  // Same recommendation engine RoiPanel.tsx already uses — reused here only
-  // to read its already-computed treeCanopy.status and
-  // metrics.hotspotFractionOfTiles for severity, not to introduce any new
-  // calculation of its own.
-  const recommendation = buildHeatMitigationRecommendation({
+  // One computation for the whole panel. buildSiteOutcome() runs the same
+  // recommendation engine RoiPanel.tsx uses and hands it back on
+  // `.recommendation`, so this panel still reads treeCanopy.status and
+  // metrics.hotspotFractionOfTiles for its card severities exactly as before
+  // — it just no longer runs that engine a second time alongside the
+  // banner's. No new calculation is introduced here either way.
+  const outcome = buildSiteOutcome({
     siteAreaM2: row.site_area_m2,
     landcover: row.landcover,
     landcoverSpotcheck: row.landcover_spotcheck,
     heatTiles: row.heat_tiles,
+    heatStats: row.heat_stats,
+    attribution: row.attribution,
     bbox,
+    forecastTimeline,
+    savedRoiInputs: row.roi_inputs,
   });
+  const recommendation = outcome.recommendation;
 
   const landcoverSeverity: Severity = recommendation.treeCanopy.status === "deficit" ? "caution" : "nominal";
   const heatSeverity = row.heat_stats ? severityFromHotspotLevel(classifyLevel(row.heat_stats.maxTempC)) : null;
@@ -272,6 +280,13 @@ export default function OverviewPanel({
 
   return (
     <div className="flex flex-col gap-3">
+      {/* First thing on the tab, above the stat grid: the one sentence a site
+          operator can act on — what this site measures now, and what the
+          recommended (or their own saved) scenario is estimated to buy them.
+          The individual numbers all existed before this; none of them was ever
+          stated as an attributable outcome. */}
+      <OutcomeBanner outcome={outcome} />
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <GlowCard icon={MapPin} title="Site Info" severity="nominal">
           <p className="truncate font-mono text-[10px] text-fg-muted" title={row.id}>

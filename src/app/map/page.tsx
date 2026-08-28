@@ -5,7 +5,7 @@ import AnalyzePanel from "@/components/map/AnalyzePanel";
 
 export default function MapPage() {
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden">
+    <div className="flex h-app-shell w-full flex-col overflow-hidden">
       <Header title="Map View" />
       {/* Below `lg` (1024px): map on top, analysis panel below, the whole
           column scrolls — "map dulu, analysis di bawah" for phones/tablets.
