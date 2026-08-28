@@ -28,6 +28,7 @@
 import { useEffect, useState } from "react";
 import { useAnalysisStore } from "@/store/analysisStore";
 import type { AnalysisTaskState } from "@/store/analysisStore";
+import StepProgressBar from "./StepProgressBar";
 
 function StepRow({ state, label, detail }: { state: AnalysisTaskState; label: string; detail: string }) {
   return (
@@ -71,7 +72,6 @@ export default function AnalyzeProgress() {
 
   const elapsedSec = Math.max(0, Math.floor((now - progress.startedAt) / 1000));
   const doneSteps = (progress.heatmap !== "pending" ? 1 : 0) + (progress.landcover !== "pending" ? 1 : 0);
-  const pct = Math.round((doneSteps / 2) * 100);
 
   const outstanding: string[] = [];
   if (progress.heatmap === "pending") outstanding.push("FortyGuard");
@@ -86,18 +86,8 @@ export default function AnalyzeProgress() {
         <span className="font-mono text-[11px] tabular-nums text-fg-muted">{elapsedSec}s</span>
       </div>
 
-      <div
-        className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-border-subtle"
-        role="progressbar"
-        aria-valuenow={doneSteps}
-        aria-valuemin={0}
-        aria-valuemax={2}
-        aria-label="Analysis progress"
-      >
-        <div
-          className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
-          style={{ width: `${pct}%` }}
-        />
+      <div className="mt-1.5">
+        <StepProgressBar done={doneSteps} total={2} busy={outstanding.length > 0} label="Analysis progress" />
       </div>
 
       <ul className="mt-2 flex flex-col gap-1">
@@ -114,10 +104,11 @@ export default function AnalyzeProgress() {
       </ul>
 
       <p className="mt-2 text-[10px] leading-relaxed text-fg-muted">
-        Most of this wait is FortyGuard processing the submitted activity, which this app polls rather than streams —
-        there is no partial result before it completes, so no time estimate is shown. Large AOIs may also see
-        OpenStreetMap retry across mirrors before responding; that is expected, not stuck. Forecast slots are fetched
-        after this, and reported separately. This run consumes API credits.
+        The solid bar only advances when a request actually returns; the moving band means work is still in flight,
+        not a percentage. No time estimate is shown because neither remaining wait is observable from here:
+        FortyGuard is polled, not streamed, and OpenStreetMap reports nothing until a mirror answers — on a large
+        AOI it retries up to four times across three mirrors, which is the usual reason this step outlasts the
+        heatmap. Forecast slots are fetched after this and reported separately. This run consumes API credits.
       </p>
     </div>
   );

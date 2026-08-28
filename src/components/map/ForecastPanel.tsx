@@ -6,6 +6,7 @@ import { FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
 import { formatForecastTimeLabel, formatForecastDateLabel } from "@/lib/wbgt";
 import { formatFallbackDateLabel } from "@/lib/relativeTime";
 import { useAnalysisStore } from "@/store/analysisStore";
+import StepProgressBar from "./StepProgressBar";
 import { SourceBadge } from "./AreaMetricCard";
 import HeatmapImage from "./HeatmapImage";
 import type { HeatForecastEntry } from "@/lib/siteRecord";
@@ -91,6 +92,9 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
   }, [siteId]);
 
   const okOffsets = FORECAST_HOUR_OFFSETS.filter((h) => heatForecast[h]?.status === "ok");
+  // Settled, not successful: a slot FortyGuard returned no data for is a
+  // finished request, and leaving it out would stall the bar below at 4/5.
+  const settledSlotCount = FORECAST_HOUR_OFFSETS.filter((h) => heatForecast[h] != null).length;
   const captureAttempted = FORECAST_HOUR_OFFSETS.some((h) => heatForecast[h]);
   const allSlotsFailed = !capturingForecast && captureAttempted && okOffsets.length === 0;
 
@@ -210,9 +214,23 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
           never returned data for stays "—"/"err", never a guessed value. */}
       <p className="text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-600">
         {capturingForecast
-          ? "Capturing the full +12h window from FortyGuard…"
+          ? `Capturing the full +12h window from FortyGuard — ${settledSlotCount} of ${FORECAST_HOUR_OFFSETS.length} slots returned…`
           : "Captured automatically for this AOI. Click a slot to preview its heatmap."}
       </p>
+
+      {/* Unlike the main analyze phase, this one is genuinely determinate: each
+          of the five offsets is its own request and settles independently, so
+          the bar really does fill in steps as slots come back. A slot that
+          FortyGuard had no data for counts as settled too — it is a finished
+          request with an honest empty answer, not an outstanding one. */}
+      {capturingForecast && (
+        <StepProgressBar
+          done={settledSlotCount}
+          total={FORECAST_HOUR_OFFSETS.length}
+          busy
+          label="Forecast capture progress"
+        />
+      )}
 
       <div className="grid grid-cols-5 gap-1.5">
         {FORECAST_HOUR_OFFSETS.map((hourOffset) => {
@@ -234,7 +252,7 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
               disabled={isLoading}
               onClick={() => selectForecastSlot(geometry, hourOffset)}
               title={slot?.status === "error" ? slot.message : undefined}
-              className={`flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-[11px] font-medium transition-colors disabled:cursor-wait ${
+              className={`flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
                 isSelected
                   ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-900"
                   : "border-neutral-200 text-neutral-600 hover:border-neutral-400 dark:border-neutral-800 dark:text-neutral-400 dark:hover:border-neutral-600"

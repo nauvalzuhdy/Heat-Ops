@@ -147,6 +147,32 @@ body {
     height: 100vh;
     height: 100dvh;
   }
+
+  /* Indeterminate sweep for components/map/StepProgressBar.tsx. Applied only to
+     the not-yet-completed part of a progress track, so motion communicates
+     "still working" without implying a completion fraction the app cannot
+     observe (FortyGuard is submit-then-poll; Overpass reports nothing until a
+     mirror answers). Transform-only, so it composites on the GPU and does not
+     trigger layout during a long analyze run. */
+  @keyframes heatops-progress-sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
+
+  .progress-sweep {
+    animation: heatops-progress-sweep 1.6s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .progress-sweep {
+      animation: none;
+      opacity: 0.5;
+    }
+  }
 }
 
 /* MapLibre's compact attribution control (components/map/MapCanvas.tsx)
