@@ -4,12 +4,14 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useAOIStore } from "@/store/aoiStore";
 import { useAnalysisStore } from "@/store/analysisStore";
+import type { AnalysisTaskState } from "@/store/analysisStore";
 import { MAX_AOI_AREA_SQKM, FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
 import { LANDCOVER_COLORS } from "@/lib/landcoverColors";
 import { generateSegmentationImage } from "@/lib/segmentationImage";
 import { formatFallbackDateLabel } from "@/lib/relativeTime";
 import { isSpatiallyUniform } from "@/lib/heatmapUtils";
 import AreaMetricCard, { SourceBadge } from "./AreaMetricCard";
+import AnalyzeProgress from "./AnalyzeProgress";
 import HeatmapImage from "./HeatmapImage";
 import ForecastPanel from "./ForecastPanel";
 import SiteNameModal from "./SiteNameModal";
@@ -47,11 +49,30 @@ function DataSourceBadge({ cached, realLabel }: { cached?: boolean; realLabel: s
   return cached ? <SourceBadge tone="cached">Cached (dev, no credit)</SourceBadge> : <SourceBadge>{realLabel}</SourceBadge>;
 }
 
-function LoadingRow() {
+// `state` is this ONE source's real progress. The two top-level requests run
+// in parallel but land at different times, and the panel only reveals numbers
+// once both have (analysisStore's Promise.all) — so a card whose own source has
+// already returned should say so instead of showing the same "Loading" as one
+// still waiting on FortyGuard's queue.
+function LoadingRow({ state }: { state?: AnalysisTaskState }) {
+  const label =
+    state === "done"
+      ? "Returned — finishing analysis…"
+      : state === "failed"
+        ? "Failed — finishing analysis…"
+        : "Loading…";
   return (
     <div className="flex items-center gap-2 py-1 text-xs text-neutral-400 dark:text-neutral-600">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 dark:bg-neutral-600" />
-      Loading…
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${
+          state === "done"
+            ? "bg-severity-nominal"
+            : state === "failed"
+              ? "bg-severity-critical"
+              : "animate-pulse bg-neutral-400 dark:bg-neutral-600"
+        }`}
+      />
+      {label}
     </div>
   );
 }
@@ -69,6 +90,7 @@ export default function AnalyzePanel() {
   const heatmapImageUrl = useAnalysisStore((s) => s.heatmapImageUrl);
   const heatForecast = useAnalysisStore((s) => s.heatForecast);
   const capturingForecast = useAnalysisStore((s) => s.capturingForecast);
+  const progress = useAnalysisStore((s) => s.progress);
   const capturedForecastCount = FORECAST_HOUR_OFFSETS.filter((h) => heatForecast[h]?.status === "ok").length;
 
   // Drop stale results whenever the AOI changes shape or is cleared/redrawn.
@@ -210,13 +232,10 @@ export default function AnalyzePanel() {
             </button>
           )}
 
-          {status === "analyzing" && (
-            <p className="text-xs text-neutral-400 dark:text-neutral-600">
-              Submitting to FortyGuard heatmap + satellite segmentation and querying OpenStreetMap in
-              parallel — this consumes API credits and can take up to a couple of minutes. Large AOIs may
-              see OpenStreetMap retry across mirrors before it responds — that&apos;s expected, not stuck.
-            </p>
-          )}
+          {/* Real per-request progress, replacing a static sentence that gave no
+              sense of how far along a ~45s run was. See AnalyzeProgress.tsx for
+              why this counts requests rather than tiles. */}
+          {status === "analyzing" && <AnalyzeProgress />}
 
           {status === "error" && (
             <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
@@ -235,7 +254,7 @@ export default function AnalyzePanel() {
             <div className="flex flex-col gap-5">
               <CardShell title="Footprint cross-check" badge={<SourceBadge>Real (OpenStreetMap)</SourceBadge>}>
                 {status === "analyzing" ? (
-                  <LoadingRow />
+                  <LoadingRow state={progress.landcover} />
                 ) : data?.overpass.status === "error" ? (
                   <p className="text-xs text-neutral-400 dark:text-neutral-600">{data.overpass.message}</p>
                 ) : data?.overpass.status === "ok" ? (
@@ -264,7 +283,7 @@ export default function AnalyzePanel() {
                 badge={<DataSourceBadge cached={data?.heatmap.status === "ok" ? data.heatmap.cached : undefined} realLabel="Real (FortyGuard)" />}
               >
                 {status === "analyzing" ? (
-                  <LoadingRow />
+                  <LoadingRow state={progress.heatmap} />
                 ) : data?.heatmap.status === "error" ? (
                   <p className="text-xs text-neutral-400 dark:text-neutral-600">{data.heatmap.message}</p>
                 ) : data?.heatmap.status === "ok" ? (

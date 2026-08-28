@@ -45,6 +45,31 @@ export type ForecastSlot =
     }
   | { status: "error"; message: string; capturedAt: string };
 
+// Progress reporting for the Analyze run (UI feedback pass).
+//
+// Deliberately reports only what is REALLY known. FortyGuard is submit-then-
+// poll: /v1/heatmap returns an activity_id and the entire tile set arrives at
+// once when the activity reaches Completed. There is no per-tile stream to
+// subscribe to, so a "122 of 122 tiles" bar would be an animation, not
+// progress — the same fabrication this codebase refuses for measurements.
+//
+// What IS real: the two top-level requests resolve independently (they are
+// already issued in parallel, but Promise.all below hid that from the UI until
+// the slower one landed), and each of the five forecast slots is its own
+// request. Seven genuinely observable completions, plus a real elapsed clock.
+export type AnalysisTaskState = "pending" | "done" | "failed";
+
+export type AnalysisProgress = {
+  /** epoch ms when the current run started, or null when idle. Drives a real elapsed timer. */
+  startedAt: number | null;
+  /** FortyGuard /v1/heatmap, whole-day. */
+  heatmap: AnalysisTaskState;
+  /** /api/landcover — Overpass and FortyGuard /v1/satellite, in parallel server-side. */
+  landcover: AnalysisTaskState;
+};
+
+const IDLE_PROGRESS: AnalysisProgress = { startedAt: null, heatmap: "pending", landcover: "pending" };
+
 type AnalysisState = {
   status: "idle" | "analyzing" | "success" | "error";
   data: AnalysisData | null;
@@ -54,6 +79,8 @@ type AnalysisState = {
   // Surface heatmap card already shows, not a fresh render.
   heatmapImageUrl: string | null;
   setHeatmapImageUrl: (url: string | null) => void;
+  /** Read-only from the UI's point of view — only analyzeAOI()/reset() write it. */
+  progress: AnalysisProgress;
   analyzeAOI: (geometry: Polygon) => Promise<void>;
   reset: () => void;
   // §4.4 forecast slots, keyed by hour offset (0/3/6/9/12). `null` selection
@@ -191,6 +218,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   selectedHourOffset: null,
   loadingHourOffset: null,
   capturingForecast: false,
+  progress: IDLE_PROGRESS,
   selectForecastSlot: async (geometry, hourOffset) => {
     set({ selectedHourOffset: hourOffset });
 
@@ -248,14 +276,34 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       selectedHourOffset: null,
       loadingHourOffset: null,
       capturingForecast: false,
+      progress: { startedAt: Date.now(), heatmap: "pending", landcover: "pending" },
     });
     try {
+      // Records one task's real completion the moment it lands. Guarded by the
+      // same requestId ticket the result handling below uses, so a superseded
+      // run can never write progress over a newer one.
+      const markTask = (task: "heatmap" | "landcover", ok: boolean) => {
+        if (requestId !== latestRequestId) return;
+        set((state) => ({ progress: { ...state.progress, [task]: ok ? "done" : "failed" } }));
+      };
+
       // /v1/heatmap and /v1/satellite are submitted in parallel; /api/landcover
       // itself already fetches /v1/satellite and Overpass in parallel server-side
       // (see app/api/landcover/route.ts), so all three run concurrently.
+      //
+      // The .then() hooks only report progress — they return the response
+      // untouched, so Promise.all and every consumer below behave exactly as
+      // before. A rejected fetch skips its hook and still rejects Promise.all,
+      // landing in the same catch as always.
       const [heatmapRes, landcoverRes] = await Promise.all([
-        postJSON<HeatmapRouteBody>("/api/heatmap", geometry),
-        postJSON<LandcoverRouteBody>("/api/landcover", geometry),
+        postJSON<HeatmapRouteBody>("/api/heatmap", geometry).then((res) => {
+          markTask("heatmap", res.ok);
+          return res;
+        }),
+        postJSON<LandcoverRouteBody>("/api/landcover", geometry).then((res) => {
+          markTask("landcover", res.ok);
+          return res;
+        }),
       ]);
 
       if (!heatmapRes.ok && !landcoverRes.ok) {
@@ -349,6 +397,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       heatForecast: {},
       selectedHourOffset: null,
       loadingHourOffset: null,
+      progress: IDLE_PROGRESS,
     });
   },
 }));
