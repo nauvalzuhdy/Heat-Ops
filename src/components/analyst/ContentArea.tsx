@@ -5,12 +5,10 @@ import OverviewPanel from "./OverviewPanel";
 import HotspotPanel from "./HotspotPanel";
 import ShiftSchedulePanel from "./ShiftSchedulePanel";
 import RoiPanel from "./RoiPanel";
-import ChartsPanel from "./ChartsPanel";
+import PdfReportPanel from "./PdfReportPanel";
 import ComingSoonPanel from "./ComingSoonPanel";
 
-const COMING_SOON_LABELS: Partial<Record<TabKey, string>> = {
-  pdf: "Download PDF",
-};
+const COMING_SOON_LABELS: Partial<Record<TabKey, string>> = {};
 
 export default function ContentArea({
   activeTab,
@@ -28,19 +26,42 @@ export default function ContentArea({
   forecastTimeline: ForecastTimelineSlot[];
 }) {
   if (activeTab === "overview") {
-    return <OverviewPanel row={row} bbox={bbox} createdAtLabel={createdAtLabel} createdAtTimeLabel={createdAtTimeLabel} />;
+    return (
+      <OverviewPanel
+        row={row}
+        bbox={bbox}
+        createdAtLabel={createdAtLabel}
+        createdAtTimeLabel={createdAtTimeLabel}
+        forecastTimeline={forecastTimeline}
+      />
+    );
   }
   if (activeTab === "hotspot") {
-    return <HotspotPanel tiles={row.heat_tiles ?? []} bbox={bbox} attribution={row.attribution?.heat ?? "unavailable"} />;
+    return (
+      <HotspotPanel
+        tiles={row.heat_tiles ?? []}
+        bbox={bbox}
+        aoiGeometry={row.aoi_geometry ?? null}
+        satellitePhotoUrl={row.satellite_photo_url}
+        heatStats={row.heat_stats ? { minTempC: row.heat_stats.minTempC, maxTempC: row.heat_stats.maxTempC } : null}
+        attribution={row.attribution?.heat ?? "unavailable"}
+      />
+    );
   }
   if (activeTab === "shift") {
-    return <ShiftSchedulePanel timeline={forecastTimeline} />;
+    return (
+      <ShiftSchedulePanel
+        timeline={forecastTimeline}
+        heatPhotoUrl={row.heat_photo_url}
+        satellitePhotoUrl={row.satellite_photo_url}
+      />
+    );
   }
   if (activeTab === "roi") {
     return <RoiPanel row={row} bbox={bbox} />;
   }
-  if (activeTab === "charts") {
-    return <ChartsPanel tiles={row.heat_tiles ?? []} bbox={bbox} attribution={row.attribution?.heat ?? "unavailable"} />;
+  if (activeTab === "pdf") {
+    return <PdfReportPanel row={row} />;
   }
   return <ComingSoonPanel label={COMING_SOON_LABELS[activeTab] ?? activeTab} />;
 }

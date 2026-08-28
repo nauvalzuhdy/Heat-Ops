@@ -241,11 +241,31 @@ export function formatForecastTimeLabel(date: Date): string {
 // app/api/heatmap/route.ts), never a guessed reading. Requires at least one
 // real captured entry to anchor from; returns [] if none exist.
 export type ForecastTimelineSlot =
-  | (ClassifiedForecastSlot & { dateLabel: string; timeLabel: string; available: true })
-  | { available: false; offsetHours: number; targetTime: string; dateLabel: string; timeLabel: string };
+  | (ClassifiedForecastSlot & {
+      dateLabel: string;
+      timeLabel: string;
+      available: true;
+      /** True when this reading came from an earlier date than the slot was requested for. */
+      isFallbackDate: boolean;
+    })
+  | {
+      available: false;
+      offsetHours: number;
+      targetTime: string;
+      dateLabel: string;
+      timeLabel: string;
+      isFallbackDate: false;
+    };
 
 export function buildForecastTimeline(
-  entries: { hourOffset: number; targetTime: string; meanTempC: number; cached: boolean }[]
+  entries: {
+    hourOffset: number;
+    targetTime: string;
+    meanTempC: number;
+    cached: boolean;
+    dateUsed?: string;
+    isFallbackDate?: boolean;
+  }[]
 ): ForecastTimelineSlot[] {
   const valid = entries.filter((e) => typeof e.targetTime === "string");
   if (valid.length === 0) return [];
@@ -261,7 +281,23 @@ export function buildForecastTimeline(
     if (entry) {
       const classified = classifyForecastEntry(entry);
       const d = new Date(classified.targetTime);
-      return { ...classified, dateLabel: formatForecastDateLabel(d), timeLabel: formatForecastTimeLabel(d), available: true as const };
+      // `targetTime` is the instant the slot was REQUESTED for (now + offset).
+      // When FortyGuard had no data for that date and the request fell back to
+      // an earlier one (project.md §2/§4.4), the reading actually describes
+      // `dateUsed` at this same clock time — so that is the date shown. Using
+      // targetTime's date here is what made Shift Schedule print "28 Aug" over
+      // numbers measured on the 26th.
+      const labelDate =
+        entry.isFallbackDate && entry.dateUsed
+          ? new Date(`${entry.dateUsed}T${formatForecastTimeLabel(d)}:00Z`)
+          : d;
+      return {
+        ...classified,
+        dateLabel: formatForecastDateLabel(labelDate),
+        timeLabel: formatForecastTimeLabel(d),
+        available: true as const,
+        isFallbackDate: Boolean(entry.isFallbackDate),
+      };
     }
     const d = new Date(anchorMs + offset * 3_600_000);
     return {
@@ -270,6 +306,7 @@ export function buildForecastTimeline(
       targetTime: d.toISOString(),
       dateLabel: formatForecastDateLabel(d),
       timeLabel: formatForecastTimeLabel(d),
+      isFallbackDate: false as const,
     };
   });
 }

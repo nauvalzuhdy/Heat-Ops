@@ -1,6 +1,7 @@
-// FortyGuard coverage is US-only. Phoenix, AZ is the default demo AOI city —
-// see project memory for why (extreme urban heat island, fits the "heat" story).
-export const DEFAULT_CENTER: [number, number] = [-112.074, 33.4484];
+// FortyGuard coverage is US-only. Centered on Gigafactory Texas (Austin, TX) —
+// the current demo site, and the state this project's FortyGuard API key is
+// registered to. Was Phoenix, AZ before that.
+export const DEFAULT_CENTER: [number, number] = [-97.6169, 30.2219];
 export const DEFAULT_ZOOM = 12;
 export const SEARCH_RESULT_ZOOM = 14;
 

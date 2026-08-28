@@ -259,3 +259,103 @@ export async function runHeatmapGeneration(params: {
     throw err;
   }
 }
+
+function isDegenerateHeatmapResult(result: HeatmapResult): boolean {
+  return result.map_data.features.length === 0;
+}
+
+function shiftDateString(dateStr: string, deltaDays: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
+}
+
+export type HeatmapWithDateFallback = {
+  cached: boolean;
+  result: HeatmapResult;
+  dateUsed: string;
+  isFallbackDate: boolean;
+  /** How many days back from the requested date this result came from (0 = the requested date itself). */
+  daysBack: number;
+};
+
+// How many days back the search may walk before giving up. Was 1 ("yesterday
+// only"); raised to 3 after 2026-08-28's live evidence below.
+export const MAX_HEATMAP_DAYS_BACK = 3;
+
+// Walks backward day-by-day until FortyGuard actually returns tiles, starting
+// from the requested date (project.md §2/§4.4).
+//
+// Why a backward search exists at all: FortyGuard's data availability is NOT
+// a fixed lag. 2026-08-23, -25, and -26 all returned real data through this
+// app's default "today" request, while 2026-08-27 returned FortyGuard's
+// undocumented degenerate shape (stats_data reduced to just
+// {activity_id, n_cells: 0}, empty map_data.features) at every granularity
+// (60/80/100) and both filter_type 1 and 3, live, repeatedly.
+//
+// Why the depth is 3 and not 1: the original single-step version assumed the
+// gap never exceeds one day. On 2026-08-28 at 00:30 UTC that proved wrong —
+// Gigafactory Texas returned the degenerate shape for BOTH 08-28 and 08-27,
+// and only came back with real tiles at 08-26 (D-2), 08-25, and 08-24. The
+// timing is the likely explanation: 08-27 UTC had ended only ~30 minutes
+// earlier, so a day appears to need to be finished PLUS several hours of
+// processing before it is queryable — meaning the required offset is larger
+// early in the UTC day and smaller later on. Depth 3 covers the observed
+// 2-day case with one day of margin.
+//
+// Cost is real, so the search is bounded and always tries the requested date
+// FIRST: FortyGuard bills on status "Completed" (their own docs) and a
+// degenerate result still reaches "Completed", so every extra step is a
+// billed ~30s round trip. `initialDaysBack` lets a caller that already
+// discovered the working offset moments ago (see analysisStore.ts's
+// captureFullForecast, which reuses the whole-day analysis's own `daysBack`)
+// skip re-probing dates that were just proven empty in the same run — it is
+// never used to skip a genuinely untested "today".
+//
+// Applies identically to the whole-day analysis (filter_type 3) and every
+// forecast slot (filter_type 1) through this one shared function. A forecast
+// slot's fallback shifts its date back while keeping the same wall-clock
+// start_time — the caller MUST label an `isFallbackDate: true` result as what
+// it actually is (a real reading from `dateUsed`), never as "now" or as a
+// genuine forecast.
+export async function runHeatmapWithDateFallback(params: {
+  aoiGeometry: Polygon;
+  startDate: string;
+  startTime?: string;
+  filterType?: 1 | 3;
+  hourOffset?: number;
+  granularity: 60 | 80 | 100;
+  /** Start the search this many days back instead of at `startDate` (see comment above). */
+  initialDaysBack?: number;
+  maxDaysBack?: number;
+}): Promise<HeatmapWithDateFallback> {
+  const maxDaysBack = params.maxDaysBack ?? MAX_HEATMAP_DAYS_BACK;
+  const startAt = Math.max(0, Math.min(params.initialDaysBack ?? 0, maxDaysBack));
+  const attempted: string[] = [];
+
+  for (let daysBack = startAt; daysBack <= maxDaysBack; daysBack++) {
+    const startDate = shiftDateString(params.startDate, -daysBack);
+    attempted.push(startDate);
+
+    const attempt = await runHeatmapGeneration({ ...params, startDate });
+    if (attempt.cached || !isDegenerateHeatmapResult(attempt.result)) {
+      if (daysBack > startAt || daysBack > 0) {
+        console.warn(`[FortyGuard] using ${startDate} (${daysBack} day(s) back from ${params.startDate}).`);
+      }
+      return {
+        cached: attempt.cached,
+        result: attempt.result,
+        dateUsed: startDate,
+        isFallbackDate: daysBack > 0,
+        daysBack,
+      };
+    }
+
+    console.warn(`[FortyGuard] ${startDate} returned no usable data (empty map_data.features).`);
+  }
+
+  throw new Error(
+    `No temperature data available from FortyGuard for ${attempted.length} date(s) tried ` +
+      `(${attempted[0]} back to ${attempted[attempted.length - 1]}) — try again later.`
+  );
+}

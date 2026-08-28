@@ -1,36 +1,250 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# HeatOps
 
-## Getting Started
+**Heat-aware site intelligence for industrial operations.**
+Built for **FortyGuard Hackathon'26**.
 
-First, run the development server:
+Draw an area on the map, and HeatOps pulls real surface-temperature data from FortyGuard, land cover from OpenStreetMap, and satellite imagery from Esri — then turns it into hotspot detection, worker shift-safety guidance, a cooling-investment simulation, and a PDF report. An AI Copilot sits on top of the same saved data so you can ask questions in plain language.
+
+---
+
+## Table of contents
+
+- [What it does](#what-it-does)
+- [Tech stack](#tech-stack)
+- [Getting started](#getting-started)
+- [Environment variables](#environment-variables)
+- [Database setup](#database-setup)
+- [Project structure](#project-structure)
+- [API routes](#api-routes)
+- [Working with the FortyGuard API](#working-with-the-fortyguard-api)
+- [Data honesty rules](#data-honesty-rules)
+
+---
+
+## What it does
+
+HeatOps is three pages, in the order you'd use them.
+
+### 1. Map View (`/map`)
+
+Data acquisition.
+
+- Search a location (Nominatim geocoding) or paste a Google/Apple Maps link
+- Draw an AOI polygon on the map (terra-draw)
+- On **Analyze**, runs in parallel:
+  - **FortyGuard `/v1/heatmap`** → per-tile surface temperature, rendered as a 2D canvas heatmap clipped to your AOI
+  - **Overpass (OSM)** → land-cover breakdown (buildings / roads / vegetation / water), clipped exactly to the drawn boundary
+  - **FortyGuard `/v1/satellite`** → a centroid spot-check, stored as supporting reference (deliberately *not* shown as an AOI-wide figure — it samples one point, not the whole area)
+- **Forecast +12h** — five hourly slots (+0/+3/+6/+9/+12h) fetched automatically
+- 3D building massing (deck.gl) with Schematic / Satellite / Land-cover / Photo view modes
+- Saves everything as a **site record** in Supabase, with three generated images
+
+### 2. Operational Analyst (`/analyst`)
+
+Analysis and decisions, reading only the saved site record — no re-fetching, no extra API credits.
+
+| Tab | What it gives you |
+|---|---|
+| **Overview** | Site info, land cover, heat stats, forecast sparkline, data-provenance badges, hotspot exposure gauge |
+| **Hotspot Detection** | Satellite view + pixel-native thermal grid + per-zone bar chart, in a 3×3 compass-labelled grid (Northwest … Southeast), with bidirectional hover cross-highlighting between chart and both maps |
+| **Shift Schedule** | Estimated WBGT per forecast slot, classified against NIOSH 2016 Recommended Exposure Limits → safe / caution / danger windows for outdoor work |
+| **Heat Mitigation Planner** | Deterministic canopy-deficit recommendation + an editable ROI simulator (trees / canopy / solar → cost, energy saved, payback, break-even chart) |
+| **Download PDF** | A print-ready assessment report of everything above |
+
+### 3. AI Copilot (`/copilot`)
+
+A DeepSeek-powered chat with function calling over the saved site data — compare interventions, inspect a zone, generate a report, analyse a field photo. It reads the same computation modules the dashboard uses, so the two can't disagree.
+
+---
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Framework | Next.js 14 (App Router) + TypeScript |
+| Styling | Tailwind CSS, design tokens in `src/app/globals.css` |
+| Map | MapLibre GL JS + Esri World Imagery raster |
+| 3D | deck.gl (extruded GeoJSON building massing) |
+| Draw tool | terra-draw (+ MapLibre adapter) |
+| Geospatial math | Turf.js |
+| State | Zustand |
+| Database & storage | Supabase (Postgres + Storage) |
+| Charts | Recharts (dashboard), hand-drawn SVG (PDF) |
+| PDF | `@react-pdf/renderer` |
+| AI | DeepSeek (OpenAI-compatible endpoint, function calling) |
+| Animation | Framer Motion |
+
+**External data sources:** FortyGuard Temperature API, Overpass API (OpenStreetMap), Esri World Imagery / ArcGIS Export, Nominatim.
+
+---
+
+## Getting started
 
 ```bash
+npm install
+# create .env.local yourself — see Environment variables below
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open <http://localhost:3000>. You'll land on Map View.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Script | Purpose |
+|---|---|
+| `npm run dev` | Development server |
+| `npm run build` | Production build |
+| `npm start` | Serve the production build |
+| `npm run lint` | ESLint |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Type-check with `npx tsc --noEmit`.
 
-## Learn More
+> **Start in cached mode.** Leave `FORTYGUARD_MODE` unset or set to `cached` while developing — it serves fixture data and spends **zero** API credits. Only switch to `live` for a real run.
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Environment variables
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Create `.env.local` in the project root. **Never commit it** — every key below is server-only except the two `NEXT_PUBLIC_*` ones.
 
-## Deploy on Vercel
+```bash
+# --- FortyGuard ---
+FORTYGUARD_API_KEY=your_key_here
+# "live" is the ONLY value that spends credit. Unset, "cached", or any typo
+# falls back to cached fixtures — the safe default for a flag that costs money.
+FORTYGUARD_MODE=cached
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+# --- Supabase ---
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key   # bypasses RLS — server only
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_publishable_key
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+# --- AI Copilot ---
+DEEPSEEK_API_KEY=your_deepseek_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
+```
+
+Visit `/api/envcheck` to see — without calling FortyGuard — whether your API key is present and whether the next call will spend credit or return fixtures. (It's a temporary diagnostic route; safe to delete once you no longer need it.)
+
+> Editing `.env.local` while the dev server is running can silently flip FortyGuard into live mode. Re-check the value before any Analyze run.
+
+---
+
+## Database setup
+
+One Postgres table plus one Storage bucket.
+
+**Storage:** create a **public** bucket named `site-photos`. Each saved site writes `<site-id>/satellite.png`, `<site-id>/segmentation.png`, and `<site-id>/heat.png`.
+
+**Table `sites`:**
+
+| Column | Type | Holds |
+|---|---|---|
+| `id` | uuid (PK) | Minted server-side so the Storage path and row id agree |
+| `name` | text | User-entered, or auto-generated from the location |
+| `created_at` | timestamptz | Analysis time |
+| `aoi_geometry` | jsonb | The drawn GeoJSON Polygon |
+| `site_area_m2` | numeric | Turf-computed area |
+| `landcover` | jsonb | Overpass breakdown, AOI-wide |
+| `landcover_spotcheck` | jsonb | FortyGuard centroid sample (reference only) |
+| `heat_tiles` | jsonb | Per-tile lat/lng/temp/bounds |
+| `heat_stats` | jsonb | min/mean/max/stddev + `dateUsed`, `isFallbackDate` |
+| `heat_forecast` | jsonb | The +0…+12h slots |
+| `attribution` | jsonb | `real` / `synthetic` / `unavailable` per data source |
+| `satellite_photo_url`, `segmentation_photo_url`, `heat_photo_url` | text | Public Storage URLs |
+| `roi_inputs` | jsonb | Saved ROI simulator scenario (nullable) |
+
+If ROI inputs aren't persisting, this column is the usual reason:
+
+```sql
+alter table sites add column if not exists roi_inputs jsonb;
+```
+
+---
+
+## Project structure
+
+```
+src/
+├── app/
+│   ├── map/            Map View
+│   ├── analyst/        Operational Analyst
+│   ├── copilot/        AI Copilot
+│   └── api/            Server routes (all external keys stay here)
+├── components/
+│   ├── map/            Canvas, draw control, analyze + forecast panels
+│   ├── analyst/        Dashboard tabs and cards
+│   ├── copilot/        Chat UI
+│   ├── layout/         Sidebar, header
+│   └── ui/             Shared primitives
+├── lib/                Pure logic + API clients (see below)
+└── store/              Zustand stores (aoi, analysis, map, draw, ui)
+```
+
+Notable modules in `src/lib/`:
+
+| File | Responsibility |
+|---|---|
+| `fortyguard.ts` | FortyGuard client: submit, poll with backoff, cached/live mode, date fallback |
+| `heatmapUtils.ts` | 3×3 zone binning, compass labels, level classification, uniform-field detection |
+| `wbgt.ts` | WBGT estimation + NIOSH risk bands + forecast timeline |
+| `roiSimulator.ts` | Cost / energy / payback model with disclosed assumptions |
+| `heatMitigationRecommendation.ts` | Deterministic canopy-deficit heuristic |
+| `reportData.ts` | Single source of truth shared by the PDF route and the Copilot's report tool |
+| `pdf/SiteReportDocument.tsx` | The report layout |
+| `copilotOrchestrator.ts` / `copilotTools.ts` | DeepSeek tool-use loop |
+
+---
+
+## API routes
+
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/heatmap` | POST | FortyGuard heatmap (whole-day or a forecast hour) |
+| `/api/landcover` | POST | Overpass + FortyGuard satellite, in parallel |
+| `/api/satellite/export` | GET | Esri satellite image for an AOI |
+| `/api/geocode` | GET | Nominatim forward/reverse geocoding |
+| `/api/resolve-map-url` | POST | Turn a pasted map link into coordinates |
+| `/api/sites` | POST / PATCH | Create a site record; append forecast slots |
+| `/api/sites/[id]` | GET / PATCH / DELETE | Read stored forecast; rename; delete |
+| `/api/sites/[id]/roi` | GET / PATCH | Load / save the ROI scenario |
+| `/api/sites/[id]/report` | GET | Generate the PDF |
+| `/api/copilot/chat` | POST | AI Copilot turn |
+| `/api/envcheck` | GET | Confirm required env vars are present |
+
+---
+
+## Working with the FortyGuard API
+
+Behaviours worth knowing before you debug something that isn't actually broken. All of these were confirmed against the live API.
+
+**Coverage is US-only.** AOIs outside the United States return no data.
+
+**Async by design.** `POST /v1/heatmap` returns an `activity_id` (nested under `data`); poll `GET /v1/status/{activity_id}` with 3s → 6s → 12s backoff until `Completed`.
+
+**Credits are charged on `Completed`, not on success.** A response that completes with *no usable data* still costs credit. Failed tasks (`status: "Failed"`) don't.
+
+**Hourly requests must land on a whole hour.** `filter_type: 1` data is keyed to `HH:00`. The same AOI and date returns a full tile set at `07:00` and an empty result at `07:15`. Always truncate minutes.
+
+**Today's data often isn't ready.** Availability lags by a variable amount — a day appears to need to be finished *plus* several hours of processing, so the required offset is larger early in the UTC day. It is not a fixed lag, and it isn't location-specific. `runHeatmapWithDateFallback()` handles this: it tries the requested date first, then walks back up to three days, and every result carries the date it actually came from.
+
+**An empty result has its own shape.** Instead of the documented `stats_data`, you get `{ activity_id, n_cells: 0 }` with an empty `map_data.features`. That's the signal to fall back.
+
+**Some fields come back spatially uniform.** For certain AOIs and dates every tile carries an identical temperature, so min = mean = max and the heatmap renders flat. The reading is real, just without spatial detail — larger AOIs generally return more. `isSpatiallyUniform()` detects this so the UI can say so.
+
+**Granularity** is `60 | 80 | 100` metres, chosen from AOI area by `pickGranularity()` to keep tile counts useful. All three are valid; none of them causes the empty-result case.
+
+---
+
+## Data honesty rules
+
+These are non-negotiable in this codebase, and worth keeping if you extend it:
+
+1. **Never fabricate a measurement.** A slot with no data stays visibly unavailable — never interpolated, never filled from a neighbour.
+2. **Never present older data as current.** When a request falls back to an earlier date, every surface that displays it — dashboard, Map View, PDF — names the real date and says it isn't a forecast.
+3. **Label provenance everywhere.** `Real` / `Cached` / `N/A` badges reflect where each number actually came from, and cached (fixture) values say so explicitly.
+4. **Compute once, reuse.** Zone binning, WBGT, ROI, and recommendations live in single shared modules so the dashboard, the PDF, and the Copilot can never disagree.
+
+---
+
+Built for FortyGuard Hackathon'26 · Data © FortyGuard, OpenStreetMap contributors, Esri.

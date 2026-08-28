@@ -4,8 +4,10 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 export type ViewMode = "schematic" | "satellite";
 // Independent of ViewMode (basemap choice): this toggles the deck.gl
 // building/road styling — Massing favors the 3D form + shadow (§4.6),
-// Land-cover keeps the category recolor (blue buildings, yellow roads).
-export type RenderMode = "massing" | "landcover";
+// Land-cover keeps the category recolor (blue buildings, yellow roads),
+// Photoreal colors each building roof from the real satellite image
+// (lib/photorealisticMassing.ts) — an ADDITIONAL mode, not a replacement.
+export type RenderMode = "massing" | "landcover" | "photoreal";
 
 type MapState = {
   map: MapLibreMap | null;

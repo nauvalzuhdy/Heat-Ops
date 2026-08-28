@@ -6,8 +6,14 @@ import { FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
 
 // `cached` marks results served by FortyGuard's cached/dev mode (see
 // lib/fortyguard.ts) instead of a live, credit-consuming call — always
-// `false`/absent for Overpass, which is free and never cached.
-export type EndpointResult<T> = { status: "ok"; result: T; cached?: boolean } | { status: "error"; message: string };
+// `false`/absent for Overpass, which is free and never cached. `dateUsed`/
+// `isFallbackDate` are heatmap-specific (lib/fortyguard.ts's
+// runHeatmapWithDateFallback — see project.md §2/§4.4 for why a single
+// yesterday-fallback exists) and stay undefined for satellite/overpass,
+// which have no such fallback.
+export type EndpointResult<T> =
+  | { status: "ok"; result: T; cached?: boolean; dateUsed?: string; isFallbackDate?: boolean }
+  | { status: "error"; message: string };
 
 type AnalysisData = {
   areaSqKm: number;
@@ -24,7 +30,19 @@ type AnalysisData = {
 // request time) — not to be confused with `capturedAt`, which is just when
 // the fetch happened to resolve.
 export type ForecastSlot =
-  | { status: "ok"; result: HeatmapResult; cached?: boolean; meanTempC: number; targetTime: string; capturedAt: string }
+  | {
+      status: "ok";
+      result: HeatmapResult;
+      cached?: boolean;
+      meanTempC: number;
+      targetTime: string;
+      capturedAt: string;
+      // See project.md §2/§4.4 — this slot's date_time.start_date shifted
+      // back one day because "today" returned no usable data. Must always be
+      // labeled as such, never shown as today's forecast.
+      dateUsed: string;
+      isFallbackDate: boolean;
+    }
   | { status: "error"; message: string; capturedAt: string };
 
 type AnalysisState = {
@@ -48,11 +66,20 @@ type AnalysisState = {
   // loadingHourOffset (which is per-slot, set by a user's individual click)
   // since the auto-capture below fetches all 5 offsets at once.
   capturingForecast: boolean;
-  captureFullForecast: (geometry: Polygon) => Promise<void>;
+  captureFullForecast: (geometry: Polygon, daysBackHint?: number) => Promise<void>;
 };
 
 type HeatmapRouteBody =
-  | { areaSqKm: number; cached: boolean; result: HeatmapResult; granularity: 60 | 80 | 100; targetTime: string }
+  | {
+      areaSqKm: number;
+      cached: boolean;
+      result: HeatmapResult;
+      granularity: 60 | 80 | 100;
+      targetTime: string;
+      dateUsed: string;
+      isFallbackDate: boolean;
+      daysBack: number;
+    }
   | { error: string };
 
 type LandcoverRouteBody =
@@ -67,12 +94,17 @@ type LandcoverRouteBody =
 async function postJSON<TBody>(
   url: string,
   geometry: Polygon,
-  hourOffset?: number
+  hourOffset?: number,
+  daysBackHint?: number
 ): Promise<{ ok: boolean; body: TBody }> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(hourOffset === undefined ? { geometry } : { geometry, hourOffset }),
+    body: JSON.stringify({
+      geometry,
+      ...(hourOffset === undefined ? {} : { hourOffset }),
+      ...(daysBackHint === undefined ? {} : { daysBackHint }),
+    }),
   });
   const body: TBody = await res.json();
   return { ok: res.ok, body };
@@ -82,31 +114,53 @@ async function postJSON<TBody>(
 // captureFullForecast (all 5 offsets at once, after Analyze succeeds) — both
 // just need "fetch this one offset's slot", differing only in how many they
 // call and what else they touch in the store around it.
-async function fetchForecastSlot(geometry: Polygon, hourOffset: number): Promise<ForecastSlot> {
+async function fetchForecastSlot(
+  geometry: Polygon,
+  hourOffset: number,
+  daysBackHint?: number
+): Promise<ForecastSlot> {
   try {
-    const res = await postJSON<HeatmapRouteBody>("/api/heatmap", geometry, hourOffset);
+    const res = await postJSON<HeatmapRouteBody>("/api/heatmap", geometry, hourOffset, daysBackHint);
     if (res.ok && "result" in res.body) {
+      // app/api/heatmap/route.ts now guarantees a usable
+      // stats_data.temperature_stats.mean (normalizing/computing it
+      // server-side, or failing the request with a specific message instead
+      // of returning a malformed one) — this is defense in depth, not the
+      // primary fix, for the bug where an unguarded read here ("Cannot read
+      // properties of undefined (reading 'mean')") was silently turning
+      // every one of a live analysis's 5 forecast slots into that same
+      // generic, unhelpful error message.
+      const meanTempC = res.body.result.stats_data?.temperature_stats?.mean;
+      if (typeof meanTempC !== "number") {
+        return {
+          status: "error",
+          message: `FortyGuard returned no usable temperature data for the +${hourOffset}h slot.`,
+          capturedAt: new Date().toISOString(),
+        };
+      }
       return {
         status: "ok",
         result: res.body.result,
         cached: res.body.cached,
-        meanTempC: res.body.result.stats_data.temperature_stats.mean,
+        meanTempC,
         // Route always returns this for a slot request; the `?? new Date()`
         // fallback only guards a malformed/old response shape, not a real
         // "unknown time" case — it should never actually fire.
         targetTime: res.body.targetTime ?? new Date().toISOString(),
         capturedAt: new Date().toISOString(),
+        dateUsed: res.body.dateUsed,
+        isFallbackDate: res.body.isFallbackDate,
       };
     }
     return {
       status: "error",
-      message: ("error" in res.body && res.body.error) || "Forecast fetch failed",
+      message: ("error" in res.body && res.body.error) || `FortyGuard forecast fetch failed for +${hourOffset}h.`,
       capturedAt: new Date().toISOString(),
     };
   } catch (err) {
     return {
       status: "error",
-      message: err instanceof Error ? err.message : "Forecast fetch failed",
+      message: err instanceof Error ? `${err.message} (+${hourOffset}h slot)` : `Forecast fetch failed for +${hourOffset}h.`,
       capturedAt: new Date().toISOString(),
     };
   }
@@ -160,12 +214,14 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // parallel) instead of requiring 5 individual clicks in ForecastPanel.
   // Offsets that fail simply don't get an entry — never a fabricated value
   // (see ForecastPanel's sync effect, which only ever persists "ok" slots).
-  captureFullForecast: async (geometry) => {
+  captureFullForecast: async (geometry, daysBackHint) => {
     const requestId = ++latestForecastRequestId;
     set({ capturingForecast: true });
 
     const results = await Promise.all(
-      FORECAST_HOUR_OFFSETS.map(async (hourOffset) => [hourOffset, await fetchForecastSlot(geometry, hourOffset)] as const)
+      FORECAST_HOUR_OFFSETS.map(
+        async (hourOffset) => [hourOffset, await fetchForecastSlot(geometry, hourOffset, daysBackHint)] as const
+      )
     );
 
     if (requestId !== latestForecastRequestId) {
@@ -222,7 +278,13 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
             landcoverRes.ok && "centroid" in landcoverRes.body ? landcoverRes.body.centroid : { lat: 0, lon: 0 },
           heatmap:
             heatmapRes.ok && "result" in heatmapRes.body
-              ? { status: "ok", result: heatmapRes.body.result, cached: heatmapRes.body.cached }
+              ? {
+                  status: "ok",
+                  result: heatmapRes.body.result,
+                  cached: heatmapRes.body.cached,
+                  dateUsed: heatmapRes.body.dateUsed,
+                  isFallbackDate: heatmapRes.body.isFallbackDate,
+                }
               : {
                   status: "error",
                   message: ("error" in heatmapRes.body && heatmapRes.body.error) || "Heatmap generation failed",
@@ -248,12 +310,24 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       // window automatically — not awaited: the main results above are
       // already ready to show, and forecast slots fill in over the next
       // few seconds (ForecastPanel reflects `heatForecast`/`capturingForecast`
-      // reactively as they arrive). Only fires when the whole-day heatmap
-      // itself actually succeeded — an AOI whose base heatmap failed has no
-      // useful forecast to chase either.
-      if (heatmapRes.ok && "result" in heatmapRes.body) {
-        get().captureFullForecast(geometry);
-      }
+      // reactively as they arrive). Runs independently of whether the main
+      // whole-day heatmap succeeded (project.md §2/§4.4 investigation) — a
+      // whole-day request can fail for a reason that has nothing to do with
+      // forecast (e.g. FortyGuard has no same-day data yet, even after this
+      // app's own one-step yesterday retry), and each forecast slot already
+      // fails independently and explicitly via its own retry rather than
+      // fabricating data — so there is no reason to skip trying it just
+      // because the unrelated whole-day call failed.
+      //
+      // When the whole-day call DID succeed, its `daysBack` is passed along
+      // so each slot starts its own search at the offset already proven to
+      // hold data for this AOI seconds ago, instead of re-probing (and
+      // re-paying for) the same empty dates five more times. Omitted when the
+      // whole-day call failed — then each slot searches from scratch.
+      get().captureFullForecast(
+        geometry,
+        heatmapRes.ok && "daysBack" in heatmapRes.body ? heatmapRes.body.daysBack : undefined
+      );
     } catch (err) {
       if (requestId !== latestRequestId) return; // superseded — a stale failure shouldn't clobber a newer run either
       set({ status: "error", error: err instanceof Error ? err.message : "Analysis failed" });

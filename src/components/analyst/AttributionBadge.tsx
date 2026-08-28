@@ -3,12 +3,20 @@
 // so Sub-task 2 (Hotspot Analysis) can reuse the exact same badge instead of
 // redefining its styles a second time (the same drift risk called out for
 // lib/landcoverColors.ts).
+//
+// Visual-consistency pass: these used to be hardcoded emerald/amber/neutral
+// Tailwind classes, even though app/globals.css / tailwind.config.ts already
+// define a --status-real/cached/unavailable token group for exactly this
+// concept ("data provenance") — this badge just wasn't reading them yet.
+// Switching to those tokens means every tab that renders this badge
+// (Overview, Hotspot, Charts, ROI) now shares one literal color definition
+// instead of five near-identical ones.
 export type AttributionStatus = "real" | "synthetic" | "unavailable";
 
 const STYLES: Record<AttributionStatus, string> = {
-  real: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  synthetic: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  unavailable: "bg-neutral-500/10 text-neutral-500 dark:text-neutral-500",
+  real: "bg-status-real-bg text-status-real",
+  synthetic: "bg-status-cached-bg text-status-cached",
+  unavailable: "bg-status-unavailable-bg text-status-unavailable",
 };
 
 const LABELS: Record<AttributionStatus, string> = { real: "Real", synthetic: "Cached", unavailable: "N/A" };

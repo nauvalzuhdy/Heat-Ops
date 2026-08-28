@@ -1,16 +1,28 @@
 "use client";
 
+// App shell sidebar. Navigation items/routes/behavior unchanged — Map View /
+// Operational Analyst / AI Copilot, in that order, all enabled.
+//
+// Responsive behavior (UI/UX pass): below `lg` (1024px) the sidebar is a
+// fixed overlay with a backdrop, so opening it never squeezes the map/
+// analysis content into an unusably narrow column on a phone or tablet — at
+// `lg` and up it reverts to the original in-flow, width-collapsing behavior
+// exactly as before. Same `sidebarOpen` boolean/toggle from uiStore drives
+// both — no new state, just different CSS per breakpoint.
+//
+// The former footer (a "Close sidebar" button + "FortyGuard Hackathon'26"
+// caption) is gone: the close action now lives in Header.tsx's single
+// top-left toggle (see that file), and the caption text was removed per an
+// explicit UI cleanup request rather than left as dead space.
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useUIStore } from "@/store/uiStore";
 
 type NavItem = {
   label: string;
   href: string;
   icon: ReactNode;
-  disabled?: boolean;
-  badge?: string;
 };
 
 const MapIcon = () => (
@@ -27,16 +39,6 @@ const ChartIcon = () => (
   </svg>
 );
 
-// Same icon Header.tsx used to show for the sidebar toggle — defined locally
-// rather than imported, matching this file's existing pattern of owning its
-// own icon components (MapIcon/ChartIcon/SparkleIcon below).
-const PanelToggleIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" strokeWidth={1.75} stroke="currentColor" className="h-5 w-5">
-    <rect x="3.75" y="4.5" width="16.5" height="15" rx="2" />
-    <path strokeLinecap="round" d="M9.75 4.5v15" />
-  </svg>
-);
-
 const SparkleIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" strokeWidth={1.75} stroke="currentColor" className="h-5 w-5">
     <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75 11 7.5l3.75 1.25L11 10l-1.25 3.75L8.5 10l-3.75-1.25L8.5 7.5l1.25-3.75Z" />
@@ -47,87 +49,61 @@ const SparkleIcon = () => (
 const navItems: NavItem[] = [
   { label: "Map View", href: "/map", icon: <MapIcon /> },
   { label: "Operational Analyst", href: "/analyst", icon: <ChartIcon /> },
-  { label: "AI Copilot", href: "#", icon: <SparkleIcon />, disabled: true, badge: "Soon" },
+  { label: "AI Copilot", href: "/copilot", icon: <SparkleIcon /> },
 ];
 
 export default function AppSidebar() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const pathname = usePathname();
 
+  // Default closed on phone/tablet-sized viewports so it doesn't cover the
+  // map/content on first load — desktop's existing default-open behavior is
+  // untouched. Runs once per mount (i.e. once per page navigation, since
+  // each page renders its own <AppSidebar/>), not on resize, so it never
+  // fights a manual toggle made mid-session.
+  useEffect(() => {
+    if (window.innerWidth < 1024) setSidebarOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <div
-      className={`h-full shrink-0 overflow-hidden border-r border-neutral-200 bg-white transition-[width] duration-200 dark:border-neutral-800 dark:bg-neutral-950 ${
-        sidebarOpen ? "w-60" : "w-0 border-r-0"
-      }`}
-    >
-      <nav className="flex h-full w-60 flex-col gap-1 px-3 py-4">
-        {navItems.map((item) => {
-          const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`);
-          const baseClasses =
-            "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors";
+    <>
+      {/* Mobile/tablet-only backdrop — dismisses the overlay on tap. Hidden
+          entirely at lg+ where the sidebar pushes layout instead of
+          floating over it. */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 top-16 z-30 bg-black/50 lg:hidden"
+          onClick={toggleSidebar}
+          aria-hidden="true"
+        />
+      )}
 
-          if (item.disabled) {
+      <div
+        className={`fixed inset-y-0 top-16 left-0 z-40 w-64 overflow-hidden border-r border-border-subtle bg-surface transition-transform duration-200 lg:static lg:top-0 lg:z-auto lg:shrink-0 lg:transition-[width] lg:duration-200 ${
+          sidebarOpen ? "translate-x-0 lg:w-60" : "-translate-x-full lg:w-0 lg:translate-x-0 lg:border-r-0"
+        }`}
+      >
+        <nav className="flex h-full w-64 flex-col gap-1 px-3 py-4 lg:w-60">
+          {navItems.map((item) => {
+            const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`);
             return (
-              <div
+              <Link
                 key={item.label}
-                aria-disabled="true"
-                className={`${baseClasses} cursor-not-allowed text-neutral-400 dark:text-neutral-600`}
+                href={item.href}
+                className={`group flex items-center gap-3 rounded-card-sm px-3 py-2.5 text-sm font-medium transition-colors duration-200 ${
+                  isActive ? "bg-accent-soft text-accent" : "text-fg-secondary hover:bg-surface-2 hover:text-fg-primary"
+                }`}
               >
-                <span className="text-neutral-400 dark:text-neutral-600">{item.icon}</span>
+                <span className={isActive ? "text-accent" : "text-fg-muted group-hover:text-fg-primary"}>{item.icon}</span>
                 <span className="flex-1">{item.label}</span>
-                {item.badge && (
-                  <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                    {item.badge}
-                  </span>
-                )}
-              </div>
+              </Link>
             );
-          }
-
-          return (
-            <Link
-              key={item.label}
-              href={item.href}
-              className={`${baseClasses} ${
-                isActive
-                  ? "bg-orange-500/10 text-orange-600 dark:text-orange-400"
-                  : "text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-900 dark:hover:text-white"
-              }`}
-            >
-              <span
-                className={
-                  isActive
-                    ? "text-orange-600 dark:text-orange-400"
-                    : "text-neutral-400 group-hover:text-neutral-900 dark:text-neutral-500 dark:group-hover:text-white"
-                }
-              >
-                {item.icon}
-              </span>
-              <span className="flex-1">{item.label}</span>
-            </Link>
-          );
-        })}
-
-        {/* Was previously empty vertical space below the 3 nav items — now
-            holds the sidebar-close toggle (moved out of Header.tsx) plus the
-            existing footer text. */}
-        <div className="mt-auto flex flex-col gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800">
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            aria-label="Close sidebar"
-            aria-pressed={sidebarOpen}
-            className="group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-900 dark:hover:text-white"
-          >
-            <span className="text-neutral-400 group-hover:text-neutral-900 dark:text-neutral-500 dark:group-hover:text-white">
-              <PanelToggleIcon />
-            </span>
-            <span>Close sidebar</span>
-          </button>
-          <div className="px-3 text-xs text-neutral-400 dark:text-neutral-500">FortyGuard Hackathon&apos;26</div>
-        </div>
-      </nav>
-    </div>
+          })}
+        </nav>
+      </div>
+    </>
   );
 }

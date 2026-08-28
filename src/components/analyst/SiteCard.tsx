@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Pencil, Trash2 } from "lucide-react";
+import { CARD_HOVER_CLASS } from "@/lib/motionVariants";
 
 type SiteCardProps = {
   id: string;
@@ -15,28 +17,46 @@ type SiteCardProps = {
    * HTML was rendered with Node's, mismatching whenever they differ.
    */
   createdAtLabel: string;
+  /** "3h ago" / "2d ago" — also pre-formatted server-side, see lib/relativeTime.ts. */
+  analyzedAgoLabel: string;
   heatPhotoUrl: string | null;
+  satellitePhotoUrl: string | null;
 };
-
-function SiteThumbnail({ url }: { url: string | null }) {
-  if (!url) {
-    return (
-      <div className="flex aspect-video w-full items-center justify-center rounded-md bg-neutral-100 text-[11px] text-neutral-400 dark:bg-neutral-900 dark:text-neutral-600">
-        No heat photo
-      </div>
-    );
-  }
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt="Surface heat snapshot" className="aspect-video w-full rounded-md object-cover" />;
-}
 
 // Feature 2 — Edit (rename) and Delete actions for one saved site card.
 // Split out from the async Server Component list (app/analyst/page.tsx) so
 // this piece can hold interactive state (modals, in-flight requests) and
 // trigger a router.refresh() once the underlying `sites` row changes.
-export default function SiteCard({ id, name, siteAreaM2, createdAtLabel, heatPhotoUrl }: SiteCardProps) {
+//
+// Visual redesign (project.md §5): hero-style card — the site's own
+// heat_photo_url (falling back to satellite_photo_url when no heat capture
+// exists yet) fills the entire card as a background image instead of a
+// small thumbnail, with a dark gradient overlay for text legibility. Edit/
+// Delete are icon buttons that fade in on hover instead of always-visible
+// text buttons, so the card reads clean when not being interacted with.
+// The edit/delete STATE and MODALS below are unchanged from the previous
+// revision — this is a shell restructure, not a logic change.
+//
+// No entrance animation (follow-up request, project.md §5) — the card used
+// to fade+slide up on mount via framer-motion; that's removed so the card
+// sits still at its final position from the first frame. Hover treatment
+// reuses the shared CARD_HOVER_CLASS (lib/motionVariants.ts) instead of its
+// own hardcoded hover:scale/shadow-xl — that scale used to make this card
+// visually overlap its grid neighbors on hover (the same hover-popup bug
+// fixed there), and duplicating the hover style here separately was exactly
+// the drift that bug slipped through in.
+export default function SiteCard({
+  id,
+  name,
+  siteAreaM2,
+  createdAtLabel,
+  analyzedAgoLabel,
+  heatPhotoUrl,
+  satellitePhotoUrl,
+}: SiteCardProps) {
   const router = useRouter();
   const displayName = name ?? `Site ${id.slice(0, 8)}`;
+  const photoUrl = heatPhotoUrl ?? satellitePhotoUrl;
 
   const [editOpen, setEditOpen] = useState(false);
   const [editValue, setEditValue] = useState(name ?? "");
@@ -90,41 +110,63 @@ export default function SiteCard({ id, name, siteAreaM2, createdAtLabel, heatPho
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
-      <SiteThumbnail url={heatPhotoUrl} />
-      <div className="flex flex-col gap-0.5">
-        <span className="truncate text-sm font-medium text-neutral-900 dark:text-white" title={id}>
-          {displayName}
-        </span>
-        <span className="text-xs text-neutral-500 dark:text-neutral-400">
-          {siteAreaM2 != null ? `${(siteAreaM2 / 1_000_000).toFixed(3)} km²` : "—"} · {createdAtLabel}
-        </span>
-      </div>
+    <div className={`group relative h-56 overflow-hidden rounded-xl border border-neutral-200 shadow-sm dark:border-neutral-800 ${CARD_HOVER_CLASS}`}>
+      {/* Whole-card link — everything except the edit/delete buttons below
+          sits inside it, including the image/gradient/text, so clicking
+          anywhere on the photo or name opens the analysis. Edit/Delete are
+          deliberately siblings positioned AFTER this in the DOM (not
+          descendants of it) so their clicks never also trigger navigation —
+          nesting interactive buttons inside an <a> is both invalid HTML and
+          unreliable for click handling. */}
+      <Link href={`/analyst?siteId=${id}`} className="absolute inset-0 flex flex-col justify-end" aria-label={`View analysis for ${displayName}`}>
+        {photoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photoUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+        ) : (
+          <div className="absolute inset-0 bg-neutral-100 dark:bg-neutral-900" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
 
-      <Link
-        href={`/analyst?siteId=${id}`}
-        className="mt-1 rounded-lg bg-neutral-900 px-3 py-2 text-center text-xs font-medium text-white transition-colors hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
-      >
-        View Analysis
+        <span className="absolute left-3 top-3 rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+          Analyzed {analyzedAgoLabel}
+        </span>
+
+        <div className="relative z-10 flex flex-col gap-0.5 p-4">
+          <span className="truncate text-sm font-semibold text-white" title={id}>
+            {displayName}
+          </span>
+          <span className="text-xs text-white/80">
+            {siteAreaM2 != null ? `${(siteAreaM2 / 1_000_000).toFixed(3)} km²` : "—"} · {createdAtLabel}
+          </span>
+        </div>
       </Link>
 
-      <div className="flex gap-2">
+      {/* Hidden until hover/focus (z-20, above the Link's implicit stacking)
+          — icon-only so a clean card doesn't read as cluttered with two
+          always-visible text buttons. */}
+      <div className="absolute right-3 top-3 z-20 flex gap-1.5 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <button
           type="button"
-          onClick={openEdit}
-          className="flex-1 rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
+          onClick={(e) => {
+            e.preventDefault();
+            openEdit();
+          }}
+          aria-label="Edit site name"
+          className="rounded-full bg-black/55 p-1.5 text-white backdrop-blur-sm transition-colors hover:bg-black/75"
         >
-          Edit
+          <Pencil size={14} />
         </button>
         <button
           type="button"
-          onClick={() => {
+          onClick={(e) => {
+            e.preventDefault();
             setDeleteError(null);
             setDeleteOpen(true);
           }}
-          className="flex-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+          aria-label="Delete site"
+          className="rounded-full bg-black/55 p-1.5 text-white backdrop-blur-sm transition-colors hover:bg-red-600"
         >
-          Delete
+          <Trash2 size={14} />
         </button>
       </div>
 

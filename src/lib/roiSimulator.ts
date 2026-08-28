@@ -43,19 +43,151 @@ export const KWH_ASSUMPTION_METHODOLOGY_BULLETS: string[] = [
     "energy-audit data if you have it for this site.",
 ];
 
-// Expected temperature reduction from adding the canopy/shading intervention
-// itself — a separate assumption from the kWh conversion above. EPA's
-// "Reducing Urban Heat Islands: Compendium of Strategies" cites
+// Expected temperature reduction — used ONLY as a manual fallback for
+// scenarios with no tree/canopy quantity to derive a real estimate from
+// (e.g. a solar-only scenario, which has no canopy-cover basis at all).
+// EPA's "Reducing Urban Heat Islands: Compendium of Strategies" cites
 // evapotranspiration and shading together reducing peak summer temperatures
 // by roughly 2–9°F (1–5°C); 2°C is used as a conservative default within
 // that cited range, not the midpoint or the optimistic end.
+//
+// Whenever a scenario actually has trees/canopy area, HeatOps no longer uses
+// this flat pick — see CANOPY_COOLING_C_PER_10PCT / estimateCanopyCoolingRangeC
+// below, which derives an expected-cooling RANGE from real research indexed
+// to how much canopy this specific scenario actually adds, replacing an
+// unindexed flat guess.
 export const EXPECTED_COOLING_C_RANGE = { low: 1, high: 5 } as const;
 export const DEFAULT_EXPECTED_COOLING_C = 2;
 export const EXPECTED_COOLING_ASSUMPTION_TEXT =
-  `Default expected cooling: ${DEFAULT_EXPECTED_COOLING_C}°C — a conservative pick within the ` +
-  `${EXPECTED_COOLING_C_RANGE.low}–${EXPECTED_COOLING_C_RANGE.high}°C range EPA's heat-island mitigation guidance ` +
-  `cites for combined shading and evapotranspiration effects. Actual cooling varies by intervention scale, ` +
-  `placement, and local conditions — adjust if you have a better estimate for this site.`;
+  `Fallback for scenarios with no tree/canopy quantity to estimate from (e.g. solar-only): ` +
+  `${DEFAULT_EXPECTED_COOLING_C}°C — a conservative pick within the ${EXPECTED_COOLING_C_RANGE.low}–` +
+  `${EXPECTED_COOLING_C_RANGE.high}°C range EPA's heat-island mitigation guidance cites for combined shading and ` +
+  `evapotranspiration effects. Adjust if you have a better estimate for this site.`;
+
+// ---------------------------------------------------------------------------
+// Canopy-cover-to-cooling model (project.md §5.1's "wajib dicari basisnya"
+// requirement, extended: the user asked for this to be grounded in real,
+// checkable research, presented as a RANGE, not a single invented decimal).
+//
+// Every number below was independently fact-checked against the actual
+// paper text (not just a search-engine summary) before being confirmed for
+// use — see development.md for the verification trail, including one
+// citation correction (a misattributed author name) and one source dropped
+// entirely for lack of a traceable citation.
+// ---------------------------------------------------------------------------
+export const COOLING_RESEARCH_SOURCES = [
+  {
+    id: "ibsen2022",
+    citation:
+      "Ibsen, P.C., Jenerette, G.D., Dell, T., Bagstad, K.J. & Diffendorfer, J.E. (2022). Urban landcover " +
+      "differentially drives day and nighttime air temperature across a semi-arid city. Science of the Total Environment.",
+    url: "https://www.sciencedirect.com/science/article/pii/S0048969722016825",
+    finding: "−0.026°C per 1 percentage-point increase in tree canopy cover (daytime).",
+    climateNote:
+      "Denver, Colorado — semi-arid climate. The closest climate analog among the sources checked to HeatOps' own " +
+      "typical AOI cities (Phoenix, Houston) — used here as the RANGE's conservative/low end.",
+  },
+  {
+    id: "zaerpour2025",
+    citation:
+      "Zaerpour, M., Papalexiou, S.M. & Pietroniro, A. (2025). Increasing tree canopy lowers urban air temperature " +
+      "by up to 1.5°C in heat-prone areas. npj Urban Sustainability, 5, 92.",
+    url: "https://doi.org/10.1038/s42949-025-00277-x",
+    finding:
+      "A 10% increase in tree canopy reduces air temperature by 0.8°C, while a 30% increase lowers it by as much " +
+      "as 1.5°C (scenario simulation, not a fitted linear regression — the paper explicitly notes the relationship " +
+      "is non-linear).",
+    climateNote:
+      "Calgary, Canada — a cold-temperate climate, NOT arid. Kept as the range's optimistic/high end because it's " +
+      "a documented real figure, but it is disclosed here as likely not representative of an arid HeatOps site.",
+  },
+  {
+    id: "marando2022",
+    citation:
+      "Marando, F. et al. (2022). Urban heat island mitigation by green infrastructure in European functional " +
+      "urban areas. Sustainable Cities and Society, 77, 103564.",
+    url: "https://www.sciencedirect.com/science/article/pii/S2210670721008301",
+    finding: "~16% tree cover increase associated with ~1°C average cooling (up to 2.9°C) across 601 European cities.",
+    climateNote:
+      "601 European cities, mixed climates — not arid-specific. Falls between the Denver and Calgary figures " +
+      "(~0.06°C per 1% canopy); shown as supporting context, not used as a range boundary on its own.",
+  },
+] as const;
+
+// °C of ambient air temperature reduction per 10 percentage-point increase in
+// tree canopy cover. A RANGE, not one coefficient, because the source studies
+// themselves disagree by roughly 3x — `low` (Ibsen/Denver, semi-arid) is kept
+// as the range's floor specifically because it's the most climate-appropriate
+// to HeatOps' own target cities; `high` (Zaerpour/Calgary) is the documented
+// literature ceiling but is NOT climate-matched to an arid site — see
+// COOLING_RESEARCH_SOURCES's climateNote on each for the full caveat, which
+// the UI must surface, not just this range in isolation.
+export const CANOPY_COOLING_C_PER_10PCT = { low: 0.26, high: 0.8 } as const;
+
+// Linear extrapolation of the studies above, which only tested up to ~30
+// percentage points of canopy change (Zaerpour) or city-average shifts well
+// under that (Marando, Ibsen) — a scenario adding much more canopy than that
+// is extrapolating past what's been empirically measured, not an established
+// result. Disclosed in COOLING_ASSUMPTION_TEXT rather than silently applied.
+export const CANOPY_COOLING_VALIDATED_MAX_PCT = 30;
+
+export function estimateCanopyCoolingRangeC(canopyAddedPct: number): { lowC: number; highC: number } {
+  const factor = Math.max(0, canopyAddedPct) / 10;
+  return {
+    lowC: factor * CANOPY_COOLING_C_PER_10PCT.low,
+    highC: factor * CANOPY_COOLING_C_PER_10PCT.high,
+  };
+}
+
+export const COOLING_ASSUMPTION_TEXT =
+  `Estimated from real published research on tree canopy cover vs. air temperature, indexed to how much canopy ` +
+  `THIS scenario actually adds (not a flat guess): ${CANOPY_COOLING_C_PER_10PCT.low}–` +
+  `${CANOPY_COOLING_C_PER_10PCT.high}°C per 10 percentage points of canopy cover added, per site area. The low end ` +
+  `(Ibsen et al. 2022, Denver — semi-arid) is the more climate-appropriate figure for a typical HeatOps site; the ` +
+  `high end (Zaerpour et al. 2025, Calgary — cold-temperate) is a real documented figure but from a different ` +
+  `climate, kept as the literature's upper bound rather than a claim that it applies here equally. Linear ` +
+  `extrapolation beyond ${CANOPY_COOLING_VALIDATED_MAX_PCT} percentage points of canopy change goes past what these ` +
+  `studies actually tested. Solar-only scenarios (no canopy to estimate from) fall back to a flat EPA-cited range ` +
+  `instead — see below.`;
+
+// ---------------------------------------------------------------------------
+// Solar capacity sanity check (not a cost/savings input — purely a "does
+// this number make physical sense for this site" guard). Source: Lawrence
+// Berkeley National Laboratory's "Land Requirements for Utility-Scale PV: An
+// Empirical Update on Power and Energy Density" — median 2019 fixed-tilt
+// ground-mount density ≈0.35 MWdc/acre ≈0.086 kW/m². Kept deliberately below
+// that (0.05 kW/m², i.e. ~20 m² of land per kW) since a real site also needs
+// access paths/setbacks/existing structures, not 100% panel coverage —
+// a conservative ceiling, not a tight one.
+// ---------------------------------------------------------------------------
+export const SOLAR_DENSITY_KW_PER_M2 = 0.05;
+export const SOLAR_DENSITY_SOURCE_URL = "https://emp.lbl.gov/news/utility-scale-pv-s-power-mwacre-and";
+
+export function checkSolarCapacityWarning(solarKW: number, siteAreaM2: number | null): string | null {
+  if (solarKW <= 0 || !siteAreaM2 || siteAreaM2 <= 0) return null;
+  const requiredM2 = solarKW / SOLAR_DENSITY_KW_PER_M2;
+  if (requiredM2 <= siteAreaM2) return null;
+  return (
+    `This capacity would need roughly ${Math.round(requiredM2).toLocaleString()} m² of solar array (at a typical ` +
+    `~${Math.round(SOLAR_DENSITY_KW_PER_M2 * 1000)} W/m² ground-mount density) — more than this site's total area ` +
+    `(${Math.round(siteAreaM2).toLocaleString()} m²). This capacity seems very large for a site this size.`
+  );
+}
+
+// % of site area gaining NEW canopy under this scenario — the input the
+// canopy-cooling range above is indexed to. Reuses
+// lib/heatMitigationRecommendation.ts's CANOPY_AREA_PER_TREE_M2 (single
+// source of truth for "how much canopy one tree adds") rather than a second,
+// separately-drifting constant.
+export function estimateCanopyAddedPct(
+  inputs: { numTrees: number; canopyM2: number },
+  areaM2: number,
+  canopyAreaPerTreeM2: number
+): number {
+  if (!areaM2 || areaM2 <= 0) return 0;
+  const addedM2 = inputs.numTrees * canopyAreaPerTreeM2 + inputs.canopyM2;
+  return Math.max(0, (addedM2 / areaM2) * 100);
+}
 
 // U.S. average retail electricity price, commercial customers — EIA (Energy
 // Information Administration), most recent reported average as of this

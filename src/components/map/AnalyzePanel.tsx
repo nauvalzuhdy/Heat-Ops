@@ -7,6 +7,8 @@ import { useAnalysisStore } from "@/store/analysisStore";
 import { MAX_AOI_AREA_SQKM, FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
 import { LANDCOVER_COLORS } from "@/lib/landcoverColors";
 import { generateSegmentationImage } from "@/lib/segmentationImage";
+import { formatFallbackDateLabel } from "@/lib/relativeTime";
+import { isSpatiallyUniform } from "@/lib/heatmapUtils";
 import AreaMetricCard, { SourceBadge } from "./AreaMetricCard";
 import HeatmapImage from "./HeatmapImage";
 import ForecastPanel from "./ForecastPanel";
@@ -165,7 +167,11 @@ export default function AnalyzePanel() {
   }
 
   return (
-    <aside className="flex h-full w-96 shrink-0 flex-col overflow-y-auto border-l border-neutral-200 bg-white text-neutral-900 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200">
+    // Below `lg`: full-width block below the map, border-top, no height/
+    // scroll of its own (the page column itself scrolls — see app/map/page.tsx).
+    // At `lg`+: unchanged original fixed w-96 side panel, its own h-full +
+    // overflow-y-auto, border-left instead of border-top.
+    <aside className="flex w-full shrink-0 flex-col border-t border-neutral-200 bg-white text-neutral-900 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200 lg:h-full lg:w-96 lg:overflow-y-auto lg:border-l lg:border-t-0">
       <div className="border-b border-neutral-200 px-5 py-5 dark:border-neutral-800">
         <h2 className="text-sm font-semibold text-neutral-900 dark:text-white">Analyze</h2>
         <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-500">
@@ -263,6 +269,12 @@ export default function AnalyzePanel() {
                   <p className="text-xs text-neutral-400 dark:text-neutral-600">{data.heatmap.message}</p>
                 ) : data?.heatmap.status === "ok" ? (
                   <>
+                    {data.heatmap.isFallbackDate && data.heatmap.dateUsed && (
+                      <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                        Showing {formatFallbackDateLabel(data.heatmap.dateUsed)} data — today&apos;s FortyGuard data
+                        isn&apos;t available yet.
+                      </p>
+                    )}
                     <div className="grid grid-cols-3 gap-2">
                       <StatCell label="Min" value={`${data.heatmap.result.stats_data.temperature_stats.minimum.toFixed(1)}°C`} />
                       <StatCell label="Mean" value={`${data.heatmap.result.stats_data.temperature_stats.mean.toFixed(1)}°C`} />
@@ -270,6 +282,16 @@ export default function AnalyzePanel() {
                     </div>
                     {geometry && (
                       <HeatmapImage tiles={data.heatmap.result.map_data.features} aoiGeometry={geometry} />
+                    )}
+                    {isSpatiallyUniform(
+                      data.heatmap.result.stats_data.temperature_stats.minimum,
+                      data.heatmap.result.stats_data.temperature_stats.maximum
+                    ) && (
+                      <p className="rounded-md border border-neutral-300 bg-neutral-100 px-2 py-1.5 text-[11px] leading-relaxed text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400">
+                        FortyGuard returned one uniform value across this AOI, so there&apos;s no hot/cool variation to
+                        map — the reading is real, but the image below is a single flat color. A larger AOI usually
+                        returns more spatial detail.
+                      </p>
                     )}
                     <p className="text-[11px] text-neutral-400 dark:text-neutral-600">
                       {data.heatmap.result.map_data.features.length} tile
@@ -282,9 +304,11 @@ export default function AnalyzePanel() {
                 ) : null}
               </CardShell>
 
-              {status === "success" && data?.heatmap.status === "ok" && geometry && (
-                <ForecastPanel geometry={geometry} siteId={siteId} />
-              )}
+              {/* Rendered whenever Analyze has finished, regardless of the
+                  main whole-day heatmap's own success — forecast now runs as
+                  its own independent branch (project.md §2/§4.4), not gated
+                  behind the unrelated whole-day result. */}
+              {status === "success" && geometry && <ForecastPanel geometry={geometry} siteId={siteId} />}
 
               {/*
                 /v1/satellite is deliberately NOT surfaced here. It samples a

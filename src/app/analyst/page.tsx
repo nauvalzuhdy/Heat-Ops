@@ -4,12 +4,14 @@
 // was the problem the toolbar architecture was introduced to solve.
 import Link from "next/link";
 import * as turf from "@turf/turf";
+import { MapPinned } from "lucide-react";
 import Header from "@/components/layout/Header";
 import AppSidebar from "@/components/layout/AppSidebar";
-import SiteCard from "@/components/analyst/SiteCard";
+import SiteCardGrid, { type SiteCardData } from "@/components/analyst/SiteCardGrid";
 import AnalystTabsShell from "@/components/analyst/AnalystTabsShell";
 import { getSupabaseServiceClient } from "@/lib/supabaseServer";
 import { buildForecastTimeline, type ForecastTimelineSlot } from "@/lib/wbgt";
+import { relativeTimeAgo } from "@/lib/relativeTime";
 import type { SiteRow } from "@/components/analyst/types";
 
 // Next.js's fetch cache otherwise caches supabase-js's underlying GET request
@@ -25,7 +27,7 @@ async function fetchSite(
   const { data, error } = await supabase
     .from("sites")
     .select(
-      "id, name, created_at, aoi_geometry, site_area_m2, landcover, landcover_spotcheck, heat_tiles, heat_stats, heat_forecast, heat_photo_url, attribution",
+      "id, name, created_at, aoi_geometry, site_area_m2, landcover, landcover_spotcheck, heat_tiles, heat_stats, heat_forecast, heat_photo_url, satellite_photo_url, attribution",
     )
     .eq("id", siteId)
     .maybeSingle();
@@ -45,6 +47,7 @@ type SiteListRow = {
   site_area_m2: number | null;
   created_at: string;
   heat_photo_url: string | null;
+  satellite_photo_url: string | null;
 };
 
 async function fetchAllSites(): Promise<{
@@ -54,12 +57,36 @@ async function fetchAllSites(): Promise<{
   const supabase = getSupabaseServiceClient();
   const { data, error } = await supabase
     .from("sites")
-    .select("id, name, site_area_m2, created_at, heat_photo_url")
+    .select("id, name, site_area_m2, created_at, heat_photo_url, satellite_photo_url")
     .order("created_at", { ascending: false })
     .limit(SAVED_SITES_LIMIT);
 
   if (error) return { rows: [], error: error.message };
   return { rows: (data as SiteListRow[]) ?? [], error: null };
+}
+
+// Empty state (project.md §5 redesign) — a plain "No sites saved yet"
+// sentence read as an afterthought; this is the same information with an
+// icon + a real call-to-action link into the one place a first site
+// actually gets created (Map View's "Analyze this site" flow, §4.7).
+function EmptySavedSites() {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-neutral-300 py-16 text-center dark:border-neutral-700">
+      <MapPinned size={40} strokeWidth={1.5} className="text-neutral-300 dark:text-neutral-700" />
+      <div>
+        <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">No sites saved yet</p>
+        <p className="mt-1 max-w-xs text-xs text-neutral-400 dark:text-neutral-600">
+          Draw an AOI and run an analysis in Map View — saved sites show up here.
+        </p>
+      </div>
+      <Link
+        href="/map"
+        className="mt-1 rounded-lg bg-neutral-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+      >
+        Go to Map View to analyze your first site
+      </Link>
+    </div>
+  );
 }
 
 async function SavedSitesList() {
@@ -70,30 +97,25 @@ async function SavedSitesList() {
   }
 
   if (rows.length === 0) {
-    return (
-      <p className="text-sm text-neutral-400 dark:text-neutral-600">
-        No sites saved yet. Go to Map View to analyze a site.
-      </p>
-    );
+    return <EmptySavedSites />;
   }
+
+  const cards: SiteCardData[] = rows.map((site) => ({
+    id: site.id,
+    name: site.name,
+    siteAreaM2: site.site_area_m2,
+    createdAtLabel: new Date(site.created_at).toLocaleDateString(),
+    analyzedAgoLabel: relativeTimeAgo(site.created_at),
+    heatPhotoUrl: site.heat_photo_url,
+    satellitePhotoUrl: site.satellite_photo_url,
+  }));
 
   return (
     <div className="flex flex-col gap-3">
       <h2 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
         Saved Sites ({rows.length})
       </h2>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {rows.map((site) => (
-          <SiteCard
-            key={site.id}
-            id={site.id}
-            name={site.name}
-            siteAreaM2={site.site_area_m2}
-            createdAtLabel={new Date(site.created_at).toLocaleDateString()}
-            heatPhotoUrl={site.heat_photo_url}
-          />
-        ))}
-      </div>
+      <SiteCardGrid sites={cards} />
     </div>
   );
 }

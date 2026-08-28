@@ -2,25 +2,158 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+ * HeatOps design tokens — visual redesign, Phase 1 (design system + shell).
+ * These are UI/brand tokens only: nothing here touches the domain-semantic
+ * colors in lib/landcoverColors.ts (land-cover categories) or
+ * lib/tempToColor.ts (heat gradient), which stay exactly as they are and are
+ * never redefined via these variables. See tailwind.config.ts for how these
+ * map to Tailwind utility classes (bg-app, bg-surface, text-accent, etc).
+ *
+ * Dark is the primary/default aesthetic (HeatOps already defaults to dark
+ * theme — see store/uiStore.ts) — a "premium dark-neutral foundation with
+ * warm off-white text," per the redesign brief. Light mode keeps the same
+ * accent/radius/spacing system but on a light neutral surface, not a
+ * pixel-for-pixel mirror of the dark palette.
+ * ------------------------------------------------------------------------ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Light mode surfaces */
+  --bg-app: #FAFAF8;
+  --bg-surface: #FFFFFF;
+  --bg-surface-2: #F4F4F1;
+  --border-subtle: #E6E5DF;
+  --border-strong: #D4D3CB;
+
+  /* Light mode text */
+  --fg-primary: #17170F;
+  --fg-secondary: #5B5B52;
+  --fg-muted: #8A8A7E;
+
+  /* Accent — sophisticated warm lime, darkened here for AA contrast on white */
+  --accent: #6E8F2A;
+  --accent-strong: #5C7A21;
+  --accent-soft-bg: rgba(110, 143, 42, 0.10);
+  --accent-border: rgba(110, 143, 42, 0.35);
+  --accent-fg-on-accent: #FFFFFF;
+
+  /* Status (data provenance / computation type) — distinct hues from the
+     accent so "AI/selected" and "data quality" are never visually confused */
+  --status-real-fg: #2F9E5B;
+  --status-real-bg: rgba(47, 158, 91, 0.10);
+  --status-cached-fg: #B8860B;
+  --status-cached-bg: rgba(184, 134, 11, 0.10);
+  --status-simulated-fg: #6E7EBF;
+  --status-simulated-bg: rgba(110, 126, 191, 0.10);
+  --status-unavailable-fg: #8A8A7E;
+  --status-unavailable-bg: rgba(138, 138, 126, 0.10);
+
+  /* Severity (risk/urgency level — Operational Analyst Overview redesign).
+     A THIRD, independent color category from the two above: --status-* means
+     data provenance ("is this number real or cached"), --accent-* means
+     brand/selection, this means "how urgent is what this card is showing."
+     Never reused for lib/landcoverColors.ts (land-cover categories) or
+     lib/thermalColorScale.ts (heat gradient) — those keep their own single
+     source of truth exactly as before; this is a new, unrelated category. */
+  --severity-nominal-fg: #2F9E5B;
+  --severity-nominal-bg: rgba(47, 158, 91, 0.10);
+  --severity-nominal-glow: rgba(47, 158, 91, 0.16);
+  --severity-caution-fg: #B8860B;
+  --severity-caution-bg: rgba(184, 134, 11, 0.10);
+  --severity-caution-glow: rgba(184, 134, 11, 0.16);
+  --severity-critical-fg: #DC2626;
+  --severity-critical-bg: rgba(220, 38, 38, 0.10);
+  --severity-critical-glow: rgba(220, 38, 38, 0.18);
+
+  --shadow-card: 0 1px 2px rgba(23, 23, 15, 0.04), 0 8px 20px -8px rgba(23, 23, 15, 0.10);
+  --shadow-float: 0 4px 12px rgba(23, 23, 15, 0.08), 0 16px 40px -12px rgba(23, 23, 15, 0.18);
+
+  /* Back-compat: a few not-yet-migrated components still read these two. */
+  --background: var(--bg-app);
+  --foreground: var(--fg-primary);
 }
 
 .dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  /* Dark mode surfaces — near-black/charcoal, per redesign brief */
+  --bg-app: #0B0D0C;
+  --bg-surface: #101310;
+  --bg-surface-2: #151815;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* Dark mode text — warm off-white / muted warm gray */
+  --fg-primary: #F5F4EF;
+  --fg-secondary: #C7C6BC;
+  --fg-muted: #8F8E84;
+
+  /* Accent — brighter in dark mode, still warm-lime, kept distinct from
+     lib/landcoverColors.ts's more blue-leaning "vegetation" green */
+  --accent: #A8CB3E;
+  --accent-strong: #B9DE52;
+  --accent-soft-bg: rgba(168, 203, 62, 0.14);
+  --accent-border: rgba(168, 203, 62, 0.35);
+  --accent-fg-on-accent: #10130D;
+
+  --status-real-fg: #4ADE80;
+  --status-real-bg: rgba(74, 222, 128, 0.12);
+  --status-cached-fg: #E0B23D;
+  --status-cached-bg: rgba(224, 178, 61, 0.12);
+  --status-simulated-fg: #A5B4FC;
+  --status-simulated-bg: rgba(165, 180, 252, 0.12);
+  --status-unavailable-fg: #8F8E84;
+  --status-unavailable-bg: rgba(143, 142, 132, 0.12);
+
+  /* Severity — dark-mode values, same category as the :root block above. */
+  --severity-nominal-fg: #4ADE80;
+  --severity-nominal-bg: rgba(74, 222, 128, 0.12);
+  --severity-nominal-glow: rgba(74, 222, 128, 0.35);
+  --severity-caution-fg: #E0B23D;
+  --severity-caution-bg: rgba(224, 178, 61, 0.12);
+  --severity-caution-glow: rgba(224, 178, 61, 0.35);
+  --severity-critical-fg: #F87171;
+  --severity-critical-bg: rgba(248, 113, 113, 0.14);
+  --severity-critical-glow: rgba(248, 113, 113, 0.38);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.20), 0 8px 24px -8px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 4px 16px rgba(0, 0, 0, 0.30), 0 20px 48px -12px rgba(0, 0, 0, 0.55);
+
+  --background: var(--bg-app);
+  --foreground: var(--fg-primary);
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  color: var(--fg-primary);
+  background: var(--bg-app);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
   }
+}
+
+/* MapLibre's compact attribution control (components/map/MapCanvas.tsx)
+   defaults to its expanded `[open]` state whenever there's only a single
+   attribution notice (our case: OpenStreetMap-only) — there's no JS option
+   to start it collapsed. Left alone, that expanded text overlaps whatever
+   sits near its anchor on narrow/mobile widths. Force it collapsed to just
+   the "i" toggle everywhere, revealing text only on hover/focus (matches
+   the icon's own "Toggle attribution" affordance). */
+/* maplibre-gl.css ships `.maplibregl-ctrl-attrib.maplibregl-compact-show
+   .maplibregl-ctrl-attrib-inner { display: block }` at the same 2-class
+   specificity as a plain override and loads after this file, so it wins on
+   source order alone — matching its own 3-selector-part form (rather than
+   `!important`) is what actually beats it. */
+.maplibregl-ctrl-attrib.maplibregl-compact .maplibregl-ctrl-attrib-inner {
+  display: none;
+}
+.maplibregl-ctrl-attrib.maplibregl-compact.maplibregl-compact-show .maplibregl-ctrl-attrib-inner {
+  display: none;
+}
+.maplibregl-ctrl-attrib.maplibregl-compact:hover .maplibregl-ctrl-attrib-inner,
+.maplibregl-ctrl-attrib.maplibregl-compact:focus-within .maplibregl-ctrl-attrib-inner,
+.maplibregl-ctrl-attrib.maplibregl-compact.maplibregl-compact-show:hover .maplibregl-ctrl-attrib-inner,
+.maplibregl-ctrl-attrib.maplibregl-compact.maplibregl-compact-show:focus-within .maplibregl-ctrl-attrib-inner {
+  display: block;
 }

@@ -23,5 +23,6 @@ export type SiteRow = {
   heat_stats: SiteRecord["heat_stats"];
   heat_forecast: HeatForecastEntry[] | null;
   heat_photo_url: string | null;
+  satellite_photo_url: string | null;
   attribution: SiteRecord["attribution"] | null;
 };

@@ -1,36 +1,35 @@
 "use client";
 
 import { useMapStore, type RenderMode } from "@/store/mapStore";
+import SegmentedControl, { type SegmentedOption } from "@/components/ui/SegmentedControl";
 
-const OPTIONS: { mode: RenderMode; label: string }[] = [
-  { mode: "massing", label: "Massing" },
-  { mode: "landcover", label: "Land-cover" },
+// Label shortened from "Photo-real"/"Photo-realistic Massing" to just
+// "Photo" per user feedback — the mode only samples roof/ground color from
+// a satellite photo, it doesn't render actual photo texture (walls are a
+// flat darkened shade, not a real side view) — "Photo-realistic" read as
+// overclaiming that. See lib/photorealisticMassing.ts's header comment.
+const BASE_OPTIONS: { value: RenderMode; label: string }[] = [
+  { value: "massing", label: "Massing" },
+  { value: "landcover", label: "Land-cover" },
+  { value: "photoreal", label: "Photo" },
 ];
 
-export default function RenderModeToggle() {
+export default function RenderModeToggle({
+  photorealDisabledReason,
+}: {
+  // Set when the current AOI has too many buildings for §4.6's Photo mode
+  // (see PHOTOREALISTIC_MAX_BUILDINGS) — the option stays visible but
+  // disabled, with this string as its tooltip, rather than hiding it outright.
+  photorealDisabledReason?: string | null;
+}) {
   const renderMode = useMapStore((s) => s.renderMode);
   const setRenderMode = useMapStore((s) => s.setRenderMode);
 
-  return (
-    <div className="flex items-center gap-0.5 rounded-lg border border-neutral-200 bg-white p-0.5 shadow-md dark:border-neutral-800 dark:bg-neutral-950">
-      {OPTIONS.map((option) => {
-        const isActive = renderMode === option.mode;
-        return (
-          <button
-            key={option.mode}
-            type="button"
-            onClick={() => setRenderMode(option.mode)}
-            aria-pressed={isActive}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              isActive
-                ? "bg-orange-500 text-white"
-                : "text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-white"
-            }`}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+  const options: SegmentedOption<RenderMode>[] = BASE_OPTIONS.map((opt) =>
+    opt.value === "photoreal" && photorealDisabledReason
+      ? { ...opt, disabled: true, title: photorealDisabledReason }
+      : opt
   );
+
+  return <SegmentedControl options={options} value={renderMode} onChange={setRenderMode} className="shadow-card" />;
 }

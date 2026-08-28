@@ -4,6 +4,25 @@
 // differently (body.siteId rather than a path param).
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServiceClient } from "@/lib/supabaseServer";
+import type { HeatForecastEntry } from "@/lib/siteRecord";
+
+// Read-only, Supabase-only (no FortyGuard call) — lets Map View's
+// ForecastPanel show this site's most recent STORED forecast entry as
+// historical supporting context when every slot in the current Analyze run
+// fails (project.md §4.4's "Latest available forecast data" fallback).
+// Map View otherwise has no way to read a site's already-saved data mid
+// session (only Operational Analyst fetches full rows).
+export async function GET(_request: NextRequest, { params }: { params: { id: string } }) {
+  const supabase = getSupabaseServiceClient();
+  const { data, error } = await supabase.from("sites").select("heat_forecast").eq("id", params.id).maybeSingle();
+
+  if (error) {
+    console.error("[sites] heat_forecast load failed:", error.message);
+    return NextResponse.json({ heatForecast: null });
+  }
+
+  return NextResponse.json({ heatForecast: (data?.heat_forecast as HeatForecastEntry[] | null) ?? null });
+}
 
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   let body: { name: string | null };

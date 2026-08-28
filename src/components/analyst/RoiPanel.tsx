@@ -13,6 +13,9 @@
 // Laid out as a CSS Grid "decision canvas", not a vertical stack of cards —
 // see development.md for the full before/after rationale.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import AnimatedNumber from "@/components/ui/AnimatedNumber";
+import { CARD_HOVER_CLASS } from "@/lib/motionVariants";
 import {
   simulateROI,
   DEFAULT_ROI_INPUTS,
@@ -22,6 +25,12 @@ import {
   KWH_ASSUMPTION_METHODOLOGY_BULLETS,
   EXPECTED_COOLING_ASSUMPTION_TEXT,
   ELECTRICITY_RATE_ASSUMPTION_TEXT,
+  estimateCanopyAddedPct,
+  estimateCanopyCoolingRangeC,
+  checkSolarCapacityWarning,
+  COOLING_RESEARCH_SOURCES,
+  COOLING_ASSUMPTION_TEXT,
+  CANOPY_COOLING_VALIDATED_MAX_PCT,
   type ROIInputs,
   type ROIResult,
   type HorizonYears,
@@ -29,6 +38,7 @@ import {
 import {
   buildHeatMitigationRecommendation,
   HEAT_MITIGATION_ASSUMPTIONS_TEXT,
+  CANOPY_AREA_PER_TREE_M2,
   type HeatMitigationRecommendation,
   type SiteMetrics,
 } from "@/lib/heatMitigationRecommendation";
@@ -73,12 +83,12 @@ function EvidenceRow({
   return (
     <div className="flex items-start justify-between gap-2 py-1.5">
       <div>
-        <div className="text-[11px] text-neutral-500 dark:text-neutral-400">{label}</div>
-        {note && <div className="text-[10px] text-neutral-400 dark:text-neutral-600">{note}</div>}
+        <div className="text-[11px] text-fg-muted">{label}</div>
+        {note && <div className="text-[10px] text-fg-muted">{note}</div>}
       </div>
       <div className="flex items-center gap-1.5">
         {status && <AttributionBadge status={status} />}
-        <span className={emphasis ? "text-base font-semibold text-neutral-900 dark:text-white" : "text-sm font-medium text-neutral-700 dark:text-neutral-200"}>
+        <span className={emphasis ? "text-base font-semibold text-fg-primary" : "text-sm font-medium text-fg-secondary"}>
           {value}
         </span>
       </div>
@@ -91,11 +101,11 @@ function SiteEvidencePanel({ metrics, row }: { metrics: SiteMetrics; row: SiteRo
     metrics.treeCanopyPct != null ? Math.max(0, 25 - metrics.treeCanopyPct) : null;
 
   return (
-    <section className="flex flex-col border border-neutral-200 p-3 dark:border-neutral-800">
-      <h2 className="mb-1 border-b border-neutral-100 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:border-neutral-900 dark:text-neutral-400">
+    <section className={`flex flex-col border border-border-subtle bg-surface p-3 shadow-card ${CARD_HOVER_CLASS}`}>
+      <h2 className="mb-1 border-b border-border-subtle pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
         Site Evidence
       </h2>
-      <div className="divide-y divide-neutral-100 dark:divide-neutral-900">
+      <div className="divide-y divide-border-subtle">
         <EvidenceRow
           label="Tree coverage"
           note="FortyGuard centroid spot-check — a point-sample, not measured across the whole AOI"
@@ -149,8 +159,8 @@ function RecommendationLine({ icon, label, value, muted }: { icon: string; label
   return (
     <div className="flex items-center gap-2 py-1">
       <span className="w-5 text-center text-sm leading-none">{icon}</span>
-      <span className="w-20 shrink-0 text-[11px] text-neutral-500 dark:text-neutral-400">{label}</span>
-      <span className={muted ? "text-sm text-neutral-400 dark:text-neutral-600" : "text-sm font-semibold text-neutral-900 dark:text-white"}>
+      <span className="w-20 shrink-0 text-[11px] text-fg-muted">{label}</span>
+      <span className={muted ? "text-sm text-fg-muted" : "text-sm font-semibold text-fg-primary"}>
         {value}
       </span>
     </div>
@@ -167,14 +177,14 @@ function RecommendationPanel({
   const { treeCanopy, solar, explanation } = recommendation;
 
   return (
-    <section className="flex flex-col border border-neutral-200 p-3 dark:border-neutral-800">
-      <h2 className="mb-1 border-b border-neutral-100 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:border-neutral-900 dark:text-neutral-400">
+    <section className={`flex flex-col border border-border-subtle bg-surface p-3 shadow-card ${CARD_HOVER_CLASS}`}>
+      <h2 className="mb-1 border-b border-border-subtle pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
         HeatOps Recommendation
       </h2>
 
       {treeCanopy.status === "unavailable" && (
-        <p className="mt-2 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
-          <span className="font-medium text-neutral-700 dark:text-neutral-200">Recommendation unavailable — insufficient site data.</span>{" "}
+        <p className="mt-2 text-xs leading-relaxed text-fg-muted">
+          <span className="font-medium text-fg-secondary">Recommendation unavailable — insufficient site data.</span>{" "}
           {treeCanopy.reason}
         </p>
       )}
@@ -182,7 +192,7 @@ function RecommendationPanel({
       {treeCanopy.status === "benchmark_met" && (
         <div className="mt-2 flex flex-col gap-1.5">
           <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Benchmark met — no canopy deficit detected.</p>
-          <p className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
+          <p className="text-xs leading-relaxed text-fg-muted">
             Existing tree canopy already meets the {treeCanopy.targetTreeCanopyPct}% planning benchmark used here.
             Use Your Scenario to run an optional what-if instead — HeatOps isn&apos;t prescribing an intervention.
           </p>
@@ -192,14 +202,14 @@ function RecommendationPanel({
       {treeCanopy.status === "deficit" && (
         <>
           {explanation[0] && (
-            <p className="mt-2 text-xs leading-relaxed text-neutral-600 dark:text-neutral-300">{explanation[0]}</p>
+            <p className="mt-2 text-xs leading-relaxed text-fg-secondary">{explanation[0]}</p>
           )}
-          <div className="mt-2 flex flex-col divide-y divide-neutral-100 dark:divide-neutral-900">
+          <div className="mt-2 flex flex-col divide-y divide-border-subtle">
             <RecommendationLine icon="🌳" label="Recommended" value={`+${treeCanopy.recommendedTrees.toLocaleString()} trees`} />
             <RecommendationLine icon="☂" label="Alternative" value={`+${treeCanopy.recommendedCanopyM2.toLocaleString()} m² canopy`} />
             <RecommendationLine icon="☀" label="Solar" value="Custom scenario" muted />
           </div>
-          <p className="mt-2 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-600">
+          <p className="mt-2 text-[10px] leading-relaxed text-fg-muted">
             Trees and canopy close the same estimated {Math.round(treeCanopy.deficitAreaM2).toLocaleString()} m² gap —
             two equivalent units of one recommendation, not additive line items.
           </p>
@@ -214,19 +224,19 @@ function RecommendationPanel({
       )}
 
       {solar.status === "custom_scenario" && (
-        <p className="mt-2 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-600">
-          <span className="font-medium text-neutral-500 dark:text-neutral-400">Solar:</span> {solar.reason}
+        <p className="mt-2 text-[10px] leading-relaxed text-fg-muted">
+          <span className="font-medium text-fg-muted">Solar:</span> {solar.reason}
         </p>
       )}
 
       {explanation[1] && (
-        <p className="mt-2 border-t border-neutral-100 pt-2 text-[10px] leading-relaxed text-neutral-400 dark:border-neutral-900 dark:text-neutral-600">
+        <p className="mt-2 border-t border-border-subtle pt-2 text-[10px] leading-relaxed text-fg-muted">
           {explanation[1]}
         </p>
       )}
 
-      <details className="mt-2 text-[10px] text-neutral-400 dark:text-neutral-600">
-        <summary className="cursor-pointer select-none font-medium text-neutral-500 dark:text-neutral-400">
+      <details className="mt-2 text-[10px] text-fg-muted">
+        <summary className="cursor-pointer select-none font-medium text-fg-muted">
           Recommendation assumptions
         </summary>
         <p className="mt-1 leading-relaxed">{HEAT_MITIGATION_ASSUMPTIONS_TEXT}</p>
@@ -262,7 +272,7 @@ function UnderlineNumberField({
       step={step}
       min={min}
       onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
-      className={`${width} border-b border-neutral-200 bg-transparent px-0.5 py-0.5 text-sm outline-none focus:border-orange-500 dark:border-neutral-800 dark:text-white ${align === "right" ? "text-right" : "text-left"}`}
+      className={`${width} border-b border-border-subtle bg-transparent px-0.5 py-0.5 text-sm outline-none focus:border-accent dark:text-white ${align === "right" ? "text-right" : "text-left"}`}
     />
   );
 }
@@ -287,14 +297,14 @@ function InterventionRow({
   onCostChange: (n: number) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-neutral-100 py-2 last:border-b-0 dark:border-neutral-900">
+    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-border-subtle py-2 last:border-b-0 ">
       <span className="w-5 text-center text-sm leading-none">{icon}</span>
-      <span className="w-14 shrink-0 text-[11px] text-neutral-500 dark:text-neutral-400">{label}</span>
+      <span className="w-14 shrink-0 text-[11px] text-fg-muted">{label}</span>
       <UnderlineNumberField value={qty} onChange={onQtyChange} width="w-20" />
-      <span className="text-[10px] text-neutral-400 dark:text-neutral-600">{qtyUnit}</span>
-      <span className="ml-auto text-[10px] text-neutral-400 dark:text-neutral-600">@ $</span>
+      <span className="text-[10px] text-fg-muted">{qtyUnit}</span>
+      <span className="ml-auto text-[10px] text-fg-muted">@ $</span>
       <UnderlineNumberField value={cost} onChange={onCostChange} width="w-14" />
-      <span className="text-[10px] text-neutral-400 dark:text-neutral-600">/{costUnit}</span>
+      <span className="text-[10px] text-fg-muted">/{costUnit}</span>
     </div>
   );
 }
@@ -307,6 +317,9 @@ function ScenarioPanel({
   hasUnsavedChanges,
   saveState,
   saveNote,
+  canopyAddedPct,
+  coolingRange,
+  solarWarning,
 }: {
   inputs: ROIInputs;
   set: <K extends keyof ROIInputs>(key: K, value: ROIInputs[K]) => void;
@@ -315,15 +328,18 @@ function ScenarioPanel({
   hasUnsavedChanges: boolean;
   saveState: "idle" | "saving" | "saved";
   saveNote: string | null;
+  canopyAddedPct: number;
+  coolingRange: { lowC: number; highC: number };
+  solarWarning: string | null;
 }) {
   return (
-    <section className="flex flex-col border border-neutral-200 p-3 dark:border-neutral-800">
-      <div className="mb-1 flex items-center justify-between border-b border-neutral-100 pb-1.5 dark:border-neutral-900">
-        <h2 className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Your Scenario</h2>
+    <section className={`flex flex-col border border-border-subtle bg-surface p-3 shadow-card ${CARD_HOVER_CLASS}`}>
+      <div className="mb-1 flex items-center justify-between border-b border-border-subtle pb-1.5 ">
+        <h2 className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">Your Scenario</h2>
         <button
           type="button"
           onClick={onReset}
-          className="text-[10px] text-neutral-400 hover:text-neutral-700 hover:underline dark:text-neutral-600 dark:hover:text-neutral-200"
+          className="text-[10px] text-fg-muted hover:text-fg-secondary hover:underline text-fg-muted"
         >
           Reset
         </button>
@@ -362,16 +378,28 @@ function ScenarioPanel({
         />
       </div>
 
-      <div className="mt-2 grid grid-cols-3 gap-2 border-t border-neutral-100 pt-2 dark:border-neutral-900">
+      {/* Sanity check, not a cost/savings input — flags an input that's
+          physically implausible for this site's area instead of silently
+          computing a number from it (see lib/roiSimulator.ts's
+          checkSolarCapacityWarning, sourced from LBNL's utility-PV land-use
+          density study). */}
+      {solarWarning && (
+        <p className="mt-2 flex items-start gap-1.5 border border-severity-caution-bg bg-severity-caution-bg px-2.5 py-2 text-[11px] leading-relaxed text-severity-caution">
+          <span aria-hidden>⚠</span>
+          {solarWarning}
+        </p>
+      )}
+
+      <div className="mt-2 grid grid-cols-3 gap-2 border-t border-border-subtle pt-2 ">
         <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] text-neutral-500 dark:text-neutral-400">Budget (optional)</span>
+          <span className="text-[10px] text-fg-muted">Budget (optional)</span>
           <div className="flex items-center gap-0.5">
-            <span className="text-[10px] text-neutral-400">$</span>
+            <span className="text-[10px] text-fg-muted">$</span>
             <UnderlineNumberField value={inputs.budgetUSD ?? 0} onChange={(n) => set("budgetUSD", n || null)} width="w-full" align="left" />
           </div>
         </label>
         <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] text-neutral-500 dark:text-neutral-400">Electricity ($/kWh)</span>
+          <span className="text-[10px] text-fg-muted">Electricity ($/kWh)</span>
           <UnderlineNumberField
             value={inputs.electricityRateUSDPerKWh}
             onChange={(n) => set("electricityRateUSDPerKWh", Math.max(0, n))}
@@ -381,11 +409,11 @@ function ScenarioPanel({
           />
         </label>
         <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] text-neutral-500 dark:text-neutral-400">Horizon</span>
+          <span className="text-[10px] text-fg-muted">Horizon</span>
           <select
             value={inputs.horizonYears}
             onChange={(e) => set("horizonYears", Number(e.target.value) as HorizonYears)}
-            className="border-b border-neutral-200 bg-transparent py-0.5 text-sm outline-none focus:border-orange-500 dark:border-neutral-800 dark:text-white"
+            className="border-b border-border-subtle bg-transparent py-0.5 text-sm outline-none focus:border-accent dark:text-white"
           >
             {HORIZON_YEAR_OPTIONS.map((y) => (
               <option key={y} value={y} className="text-neutral-900">
@@ -396,18 +424,48 @@ function ScenarioPanel({
         </label>
       </div>
 
-      <details className="mt-2 text-[10px] text-neutral-400 dark:text-neutral-600">
-        <summary className="cursor-pointer select-none font-medium text-neutral-500 dark:text-neutral-400">
+      <details className="mt-2 text-[10px] text-fg-muted" open>
+        <summary className="cursor-pointer select-none font-medium text-fg-muted">
           Cooling &amp; energy assumptions
         </summary>
         <div className="mt-1.5 flex flex-col gap-2">
-          <div className="flex flex-col gap-1">
-            <label className="flex items-center gap-1.5">
-              <span>Expected cooling</span>
-              <UnderlineNumberField value={inputs.expectedCoolingC} onChange={(n) => set("expectedCoolingC", Math.max(0, n))} step={0.1} width="w-12" align="left" />
-              <span>°C</span>
-            </label>
-            <p className="leading-relaxed">{EXPECTED_COOLING_ASSUMPTION_TEXT}</p>
+          <div className="flex flex-col gap-1 border-b border-border-subtle pb-2 ">
+            {canopyAddedPct > 0 ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-fg-secondary">Estimated cooling</span>
+                  <span className="font-semibold text-fg-primary">
+                    {coolingRange.lowC.toFixed(2)}–{coolingRange.highC.toFixed(2)}°C
+                  </span>
+                </div>
+                <p className="leading-relaxed">
+                  From {canopyAddedPct.toFixed(1)}% of this site&apos;s area gaining new canopy under your scenario.
+                  {canopyAddedPct > CANOPY_COOLING_VALIDATED_MAX_PCT &&
+                    ` This exceeds the ~${CANOPY_COOLING_VALIDATED_MAX_PCT}% of canopy change the source studies actually tested — treat this as an extrapolation, not a validated result.`}
+                </p>
+              </>
+            ) : (
+              <>
+                <label className="flex items-center gap-1.5">
+                  <span>Expected cooling (no canopy in this scenario)</span>
+                  <UnderlineNumberField value={inputs.expectedCoolingC} onChange={(n) => set("expectedCoolingC", Math.max(0, n))} step={0.1} width="w-12" align="left" />
+                  <span>°C</span>
+                </label>
+                <p className="leading-relaxed">{EXPECTED_COOLING_ASSUMPTION_TEXT}</p>
+              </>
+            )}
+            <p className="leading-relaxed">{COOLING_ASSUMPTION_TEXT}</p>
+            <ul className="list-disc space-y-1.5 pl-4 leading-relaxed">
+              {COOLING_RESEARCH_SOURCES.map((s) => (
+                <li key={s.id}>
+                  <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-fg-secondary underline underline-offset-2 hover:text-fg-primary">
+                    {s.citation}
+                  </a>
+                  {" — "}
+                  {s.finding} <span className="italic">{s.climateNote}</span>
+                </li>
+              ))}
+            </ul>
           </div>
           <div className="flex flex-col gap-1">
             <label className="flex items-center gap-1.5">
@@ -430,11 +488,11 @@ function ScenarioPanel({
       <button
         type="button"
         onClick={onRun}
-        className="mt-3 bg-orange-600 py-2 text-xs font-semibold text-white transition-colors hover:bg-orange-700"
+        className="mt-3 bg-accent py-2 text-xs font-semibold text-accent-fg transition-colors hover:bg-accent-strong"
       >
         Run Simulation
       </button>
-      <p className="mt-1 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-600">
+      <p className="mt-1 text-[10px] leading-relaxed text-fg-muted">
         {saveNote
           ? saveNote
           : hasUnsavedChanges
@@ -450,46 +508,110 @@ function ScenarioPanel({
 // ---------------------------------------------------------------------------
 // Result strip — one horizontal row, not four mini-cards.
 // ---------------------------------------------------------------------------
-function ResultMetric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+// `numericRange` drives the count-up (project.md §5) for metrics that are
+// real numbers — Payback stays plain `value` text since its label can be
+// "Never"/">10y", not a pure formatted number, so it isn't animatable the
+// same way. low===high renders as one animated number, not a "$X – $X" range.
+function ResultMetric({
+  label,
+  value,
+  numericRange,
+  accent,
+}: {
+  label: string;
+  value?: string;
+  numericRange?: { low: number; high: number; format: (n: number) => string };
+  accent?: boolean;
+}) {
   return (
     <div className="p-3">
-      <div className="text-[10px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{label}</div>
-      <div className={`text-lg font-semibold ${accent ? "text-orange-600 dark:text-orange-400" : "text-neutral-900 dark:text-white"}`}>{value}</div>
+      <div className="text-[10px] uppercase tracking-wide text-fg-muted">{label}</div>
+      <div className={`text-lg font-semibold ${accent ? "text-accent" : "text-fg-primary"}`}>
+        {numericRange ? (
+          Math.abs(numericRange.high - numericRange.low) < 1e-9 ? (
+            <AnimatedNumber value={numericRange.low} format={numericRange.format} />
+          ) : (
+            <>
+              <AnimatedNumber value={numericRange.low} format={numericRange.format} />
+              {" – "}
+              <AnimatedNumber value={numericRange.high} format={numericRange.format} />
+            </>
+          )
+        ) : (
+          value
+        )}
+      </div>
     </div>
   );
 }
 
-function ResultStrip({ result, inputs, justRan }: { result: ROIResult; inputs: ROIInputs; justRan: boolean }) {
-  const degenerate = result.totalCost <= 0 && result.annualSavingsUSD <= 0;
-  const neverPaysBack = !degenerate && result.paybackYears === null;
-  const beyondHorizon = !degenerate && !neverPaysBack && result.paybackBeyondHorizon;
+// Renders "$X" when low/high are effectively equal (a manual flat
+// expectedCoolingC input, e.g. solar-only scenarios — low===high by
+// construction there) or "$X – $Y" for a genuine researched range.
+function formatRange(low: number, high: number, formatter: (n: number) => string): string {
+  if (Math.abs(high - low) < 1e-9) return formatter(low);
+  return `${formatter(low)} – ${formatter(high)}`;
+}
+
+function ResultStrip({
+  bestResult,
+  worstResult,
+  inputs,
+  justRan,
+}: {
+  bestResult: ROIResult;
+  worstResult: ROIResult;
+  inputs: ROIInputs;
+  justRan: boolean;
+}) {
+  const degenerate = worstResult.totalCost <= 0 && worstResult.annualSavingsUSD <= 0 && bestResult.annualSavingsUSD <= 0;
+  const neverPaysBack = !degenerate && bestResult.paybackYears === null;
+  const beyondHorizon = !degenerate && !neverPaysBack && bestResult.paybackBeyondHorizon && worstResult.paybackBeyondHorizon;
 
   return (
-    <section className={`border border-neutral-200 transition-shadow dark:border-neutral-800 ${justRan ? "ring-2 ring-orange-500" : ""}`}>
-      <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-1.5 dark:border-neutral-900">
-        <h2 className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Simulation Result</h2>
-        <span className="text-[10px] uppercase tracking-wide text-neutral-400 dark:text-neutral-600">
-          Simulated · based on site data + your inputs
+    <section className={`border border-border-subtle bg-surface transition-shadow shadow-card ${CARD_HOVER_CLASS} ${justRan ? "ring-2 ring-accent" : ""}`}>
+      <div className="flex items-center justify-between border-b border-border-subtle px-3 py-1.5 ">
+        <h2 className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">Simulation Result</h2>
+        <span className="text-[10px] uppercase tracking-wide text-fg-muted">
+          Simulated · range from researched cooling estimate, not a single guaranteed number
         </span>
       </div>
-      <div className="grid grid-cols-2 divide-x divide-y divide-neutral-100 dark:divide-neutral-900 sm:grid-cols-4 sm:divide-y-0">
-        <ResultMetric label="Investment" value={formatUSD(result.totalCost)} />
-        <ResultMetric label="Annual savings" value={formatUSD(result.annualSavingsUSD)} />
-        <ResultMetric label="Energy saved / yr" value={formatEnergy(result.estimatedKwhSavedPerYear)} />
-        <ResultMetric label="Payback" value={paybackLabel(result, inputs.horizonYears)} accent={!degenerate && !neverPaysBack && !beyondHorizon} />
+      <div className="grid grid-cols-2 divide-x divide-y divide-border-subtle sm:grid-cols-4 sm:divide-y-0">
+        <ResultMetric label="Investment" numericRange={{ low: worstResult.totalCost, high: worstResult.totalCost, format: formatUSD }} />
+        <ResultMetric
+          label="Annual savings"
+          numericRange={{ low: worstResult.annualSavingsUSD, high: bestResult.annualSavingsUSD, format: formatUSD }}
+        />
+        <ResultMetric
+          label="Energy saved / yr"
+          numericRange={{
+            low: worstResult.estimatedKwhSavedPerYear,
+            high: bestResult.estimatedKwhSavedPerYear,
+            format: formatEnergy,
+          }}
+        />
+        <ResultMetric
+          label="Payback"
+          value={
+            bestResult.paybackYears === null && worstResult.paybackYears === null
+              ? "Never"
+              : `${paybackLabel(bestResult, inputs.horizonYears)} – ${paybackLabel(worstResult, inputs.horizonYears)}`
+          }
+          accent={!degenerate && !neverPaysBack && !beyondHorizon}
+        />
       </div>
       {(degenerate || neverPaysBack || beyondHorizon) && (
-        <p className="border-t border-neutral-100 px-3 py-1.5 text-[11px] text-amber-600 dark:border-neutral-900 dark:text-amber-400">
+        <p className="border-t border-border-subtle px-3 py-1.5 text-[11px] text-severity-caution">
           {degenerate
             ? "Enter a number of trees, canopy area, or solar capacity in Your Scenario to see a result."
             : neverPaysBack
               ? "With these assumptions, this investment does not pay back — estimated annual savings are $0."
-              : `Estimated payback (~${result.paybackYears?.toFixed(1)} years) falls beyond your ${inputs.horizonYears}-year horizon.`}
+              : `Estimated payback (~${worstResult.paybackYears?.toFixed(1)}–${bestResult.paybackYears?.toFixed(1)} years) falls beyond your ${inputs.horizonYears}-year horizon.`}
         </p>
       )}
-      {inputs.budgetUSD != null && inputs.budgetUSD > 0 && result.totalCost > inputs.budgetUSD && (
-        <p className="border-t border-neutral-100 px-3 py-1.5 text-[11px] text-amber-600 dark:border-neutral-900 dark:text-amber-400">
-          Total cost ({formatUSD(result.totalCost)}) exceeds your available budget ({formatUSD(inputs.budgetUSD)}).
+      {inputs.budgetUSD != null && inputs.budgetUSD > 0 && worstResult.totalCost > inputs.budgetUSD && (
+        <p className="border-t border-border-subtle px-3 py-1.5 text-[11px] text-severity-caution">
+          Total cost ({formatUSD(worstResult.totalCost)}) exceeds your available budget ({formatUSD(inputs.budgetUSD)}).
         </p>
       )}
     </section>
@@ -500,30 +622,42 @@ function ResultStrip({ result, inputs, justRan }: { result: ROIResult; inputs: R
 // Payback Trajectory chart — hand-rolled SVG (unchanged math, restyled
 // payback-line color to the app's existing orange accent instead of violet).
 // ---------------------------------------------------------------------------
-function PaybackTrajectoryChart({ result, horizonYears }: { result: ROIResult; horizonYears: number }) {
+function PaybackTrajectoryChart({
+  bestResult,
+  worstResult,
+  horizonYears,
+}: {
+  bestResult: ROIResult;
+  worstResult: ROIResult;
+  horizonYears: number;
+}) {
   const width = 480;
   const height = 180;
   const padL = 56;
   const padR = 12;
   const padT = 10;
   const padB = 20;
+  const isRange = Math.abs(bestResult.annualSavingsUSD - worstResult.annualSavingsUSD) > 1e-6;
 
   const years = Array.from({ length: horizonYears }, (_, i) => i + 1);
-  const maxY = Math.max(1, ...result.cumulativeCostByYear, ...result.cumulativeSavingsByYear);
+  const maxY = Math.max(1, ...worstResult.cumulativeCostByYear, ...bestResult.cumulativeSavingsByYear, ...worstResult.cumulativeSavingsByYear);
   const xFor = (year: number) => padL + ((year - 1) / Math.max(1, horizonYears - 1)) * (width - padL - padR);
   const yFor = (val: number) => height - padB - (val / maxY) * (height - padT - padB);
 
-  const costPath = years.map((y, i) => `${xFor(y)},${yFor(result.cumulativeCostByYear[i])}`).join(" ");
-  const savingsPath = years.map((y, i) => `${xFor(y)},${yFor(result.cumulativeSavingsByYear[i])}`).join(" ");
-  const paybackX =
-    result.paybackYears != null && !result.paybackBeyondHorizon ? xFor(Math.max(1, result.paybackYears)) : null;
+  const costPath = years.map((y, i) => `${xFor(y)},${yFor(worstResult.cumulativeCostByYear[i])}`).join(" ");
+  const bestSavingsPath = years.map((y, i) => `${xFor(y)},${yFor(bestResult.cumulativeSavingsByYear[i])}`).join(" ");
+  const worstSavingsPath = years.map((y, i) => `${xFor(y)},${yFor(worstResult.cumulativeSavingsByYear[i])}`).join(" ");
+  const bestPaybackX =
+    bestResult.paybackYears != null && !bestResult.paybackBeyondHorizon ? xFor(Math.max(1, bestResult.paybackYears)) : null;
+  const worstPaybackX =
+    worstResult.paybackYears != null && !worstResult.paybackBeyondHorizon ? xFor(Math.max(1, worstResult.paybackYears)) : null;
 
   const yTickCount = 3;
   const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) => (maxY / yTickCount) * i);
   const xLabelStep = Math.max(1, Math.ceil(horizonYears / 6));
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Cumulative investment versus cumulative savings over the simulation horizon">
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Cumulative investment versus cumulative savings (best/worst-case cooling estimate) over the simulation horizon">
       {yTicks.map((t) => (
         <g key={t}>
           <line x1={padL} y1={yFor(t)} x2={width - padR} y2={yFor(t)} stroke="currentColor" strokeOpacity={0.08} />
@@ -539,34 +673,97 @@ function PaybackTrajectoryChart({ result, horizonYears }: { result: ROIResult; h
             {y}
           </text>
         ))}
-      <polyline points={costPath} fill="none" stroke="#dc2626" strokeWidth={2} strokeLinejoin="round" />
-      <polyline points={savingsPath} fill="none" stroke="#059669" strokeWidth={2} strokeLinejoin="round" />
-      {paybackX != null && (
-        <>
-          <line x1={paybackX} y1={padT} x2={paybackX} y2={height - padB} stroke="#ea580c" strokeDasharray="4 3" strokeWidth={1.5} />
-          <text x={paybackX} y={padT - 2} fontSize={8} fill="#ea580c" textAnchor="middle" fontWeight={600}>
-            Payback
-          </text>
-        </>
+      {/* Cost/best-savings draw progressively left-to-right (project.md §5 —
+          framer-motion's pathLength animates stroke-dasharray/dashoffset
+          under the hood). worstSavingsPath keeps a plain, unanimated
+          polyline instead: it already carries its own static
+          strokeDasharray for its dashed styling, which pathLength's
+          internally-managed dasharray would fight over and break — a
+          simple opacity fade-in avoids that conflict. */}
+      <motion.polyline
+        points={costPath}
+        fill="none"
+        stroke="#dc2626"
+        strokeWidth={2}
+        strokeLinejoin="round"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.9, ease: "easeOut" }}
+      />
+      <motion.polyline
+        points={bestSavingsPath}
+        fill="none"
+        stroke="#059669"
+        strokeWidth={2}
+        strokeLinejoin="round"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.9, ease: "easeOut" }}
+      />
+      {isRange && (
+        <motion.polyline
+          points={worstSavingsPath}
+          fill="none"
+          stroke="#059669"
+          strokeWidth={2}
+          strokeDasharray="5 3"
+          strokeLinejoin="round"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.6 }}
+          transition={{ delay: 0.5, duration: 0.4 }}
+        />
+      )}
+      {bestPaybackX != null && (
+        <motion.line
+          x1={bestPaybackX}
+          y1={padT}
+          x2={bestPaybackX}
+          y2={height - padB}
+          stroke="#ea580c"
+          strokeDasharray="4 3"
+          strokeWidth={1.5}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.9, duration: 0.3 }}
+        />
+      )}
+      {isRange && worstPaybackX != null && (
+        <line x1={worstPaybackX} y1={padT} x2={worstPaybackX} y2={height - padB} stroke="#ea580c" strokeDasharray="1 3" strokeWidth={1} strokeOpacity={0.6} />
       )}
     </svg>
   );
 }
 
-function PaybackTrajectoryPanel({ result, horizonYears }: { result: ROIResult; horizonYears: number }) {
+function PaybackTrajectoryPanel({
+  bestResult,
+  worstResult,
+  horizonYears,
+}: {
+  bestResult: ROIResult;
+  worstResult: ROIResult;
+  horizonYears: number;
+}) {
+  const isRange = Math.abs(bestResult.annualSavingsUSD - worstResult.annualSavingsUSD) > 1e-6;
   return (
-    <section className="flex flex-col border border-neutral-200 p-3 dark:border-neutral-800">
-      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Payback Trajectory</h2>
-      <p className="mb-1 text-[11px] text-neutral-500 dark:text-neutral-400">When does this intervention recover its initial investment?</p>
-      <PaybackTrajectoryChart result={result} horizonYears={horizonYears} />
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-neutral-500 dark:text-neutral-400">
+    <section className={`flex flex-col border border-border-subtle bg-surface p-3 shadow-card ${CARD_HOVER_CLASS}`}>
+      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">Payback Trajectory</h2>
+      <p className="mb-1 text-[11px] text-fg-muted">
+        When does this intervention recover its initial investment? Shaded between the researched cooling estimate&apos;s low and high bound.
+      </p>
+      <PaybackTrajectoryChart bestResult={bestResult} worstResult={worstResult} horizonYears={horizonYears} />
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-fg-muted">
         <span className="flex items-center gap-1.5">
           <span className="h-0.5 w-3 rounded-full bg-red-600" /> Cumulative investment
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="h-0.5 w-3 rounded-full bg-emerald-600" /> Cumulative savings
+          <span className="h-0.5 w-3 rounded-full bg-emerald-600" /> Cumulative savings (best case)
         </span>
-        {!result.paybackBeyondHorizon && result.paybackYears !== null && (
+        {isRange && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-0.5 w-3 rounded-full bg-emerald-600 opacity-60" style={{ borderTop: "2px dashed" }} /> Cumulative savings (worst case)
+          </span>
+        )}
+        {bestResult.paybackYears !== null && !bestResult.paybackBeyondHorizon && (
           <span className="flex items-center gap-1.5">
             <span className="h-2 w-0.5 border-l-2 border-dashed border-orange-500" /> Payback point
           </span>
@@ -583,35 +780,49 @@ function PaybackTrajectoryPanel({ result, horizonYears }: { result: ROIResult; h
 // underlying formula. Only shown when the scenario actually has 2+
 // intervention types with a nonzero quantity to compare.
 // ---------------------------------------------------------------------------
-type ComparisonRow = { key: string; icon: string; label: string; quantity: string; result: ROIResult };
+type ComparisonRow = { key: string; icon: string; label: string; quantity: string; best: ROIResult; worst: ROIResult };
 
+// Re-runs simulateROI in isolation per intervention type, at both ends of
+// that intervention's own researched cooling range (a tree/canopy-only
+// scenario has its own %-of-area, distinct from the combined scenario's).
 function buildComparisonRows(inputs: ROIInputs, areaM2: number): ComparisonRow[] {
   const rows: ComparisonRow[] = [];
   if (inputs.numTrees > 0) {
+    const isolated = { ...inputs, canopyM2: 0, solarKW: 0 };
+    const pct = estimateCanopyAddedPct(isolated, areaM2, CANOPY_AREA_PER_TREE_M2);
+    const range = pct > 0 ? estimateCanopyCoolingRangeC(pct) : { lowC: inputs.expectedCoolingC, highC: inputs.expectedCoolingC };
     rows.push({
       key: "trees",
       icon: "🌳",
       label: "Trees",
       quantity: `${inputs.numTrees.toLocaleString()} trees`,
-      result: simulateROI({ ...inputs, canopyM2: 0, solarKW: 0 }, areaM2),
+      best: simulateROI({ ...isolated, expectedCoolingC: range.highC }, areaM2),
+      worst: simulateROI({ ...isolated, expectedCoolingC: range.lowC }, areaM2),
     });
   }
   if (inputs.canopyM2 > 0) {
+    const isolated = { ...inputs, numTrees: 0, solarKW: 0 };
+    const pct = estimateCanopyAddedPct(isolated, areaM2, CANOPY_AREA_PER_TREE_M2);
+    const range = pct > 0 ? estimateCanopyCoolingRangeC(pct) : { lowC: inputs.expectedCoolingC, highC: inputs.expectedCoolingC };
     rows.push({
       key: "canopy",
       icon: "☂",
       label: "Canopy",
       quantity: `${inputs.canopyM2.toLocaleString()} m²`,
-      result: simulateROI({ ...inputs, numTrees: 0, solarKW: 0 }, areaM2),
+      best: simulateROI({ ...isolated, expectedCoolingC: range.highC }, areaM2),
+      worst: simulateROI({ ...isolated, expectedCoolingC: range.lowC }, areaM2),
     });
   }
   if (inputs.solarKW > 0) {
+    const isolated = { ...inputs, numTrees: 0, canopyM2: 0 };
+    const result = simulateROI(isolated, areaM2);
     rows.push({
       key: "solar",
       icon: "☀",
       label: "Solar",
       quantity: `${inputs.solarKW.toLocaleString()} kW`,
-      result: simulateROI({ ...inputs, numTrees: 0, canopyM2: 0 }, areaM2),
+      best: result,
+      worst: result,
     });
   }
   return rows;
@@ -621,12 +832,12 @@ function InterventionComparisonPanel({ inputs, areaM2 }: { inputs: ROIInputs; ar
   const rows = useMemo(() => buildComparisonRows(inputs, areaM2), [inputs, areaM2]);
 
   return (
-    <section className="flex flex-col border border-neutral-200 p-3 dark:border-neutral-800">
-      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Intervention Comparison</h2>
-      <p className="mb-1 text-[11px] text-neutral-500 dark:text-neutral-400">Which intervention gives the better financial outcome?</p>
+    <section className={`flex flex-col border border-border-subtle bg-surface p-3 shadow-card ${CARD_HOVER_CLASS}`}>
+      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">Intervention Comparison</h2>
+      <p className="mb-1 text-[11px] text-fg-muted">Which intervention gives the better financial outcome?</p>
 
       {rows.length < 2 ? (
-        <p className="py-4 text-xs text-neutral-400 dark:text-neutral-600">
+        <p className="py-4 text-xs text-fg-muted">
           Comparison unavailable — this scenario uses only {rows.length === 1 ? "one intervention type" : "no interventions yet"}.
           Add a second (trees, canopy, or solar) in Your Scenario to compare outcomes.
         </p>
@@ -634,7 +845,7 @@ function InterventionComparisonPanel({ inputs, areaM2 }: { inputs: ROIInputs; ar
         <>
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-neutral-200 text-[10px] uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+              <tr className="border-b border-border-subtle text-[10px] uppercase tracking-wide text-fg-muted">
                 <th className="py-1.5 font-medium">Intervention</th>
                 <th className="py-1.5 font-medium">Investment</th>
                 <th className="py-1.5 font-medium">Annual savings</th>
@@ -643,22 +854,29 @@ function InterventionComparisonPanel({ inputs, areaM2 }: { inputs: ROIInputs; ar
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.key} className="border-b border-neutral-100 last:border-b-0 dark:border-neutral-900">
+                <tr key={r.key} className="border-b border-border-subtle last:border-b-0 ">
                   <td className="py-1.5">
                     <span className="mr-1.5">{r.icon}</span>
                     {r.label}
-                    <span className="ml-1.5 text-neutral-400 dark:text-neutral-600">({r.quantity})</span>
+                    <span className="ml-1.5 text-fg-muted">({r.quantity})</span>
                   </td>
-                  <td className="py-1.5 font-medium text-neutral-900 dark:text-white">{formatUSD(r.result.totalCost)}</td>
-                  <td className="py-1.5 font-medium text-neutral-900 dark:text-white">{formatUSD(r.result.annualSavingsUSD)}</td>
-                  <td className="py-1.5 font-medium text-neutral-900 dark:text-white">{paybackLabel(r.result, inputs.horizonYears)}</td>
+                  <td className="py-1.5 font-medium text-fg-primary">{formatUSD(r.worst.totalCost)}</td>
+                  <td className="py-1.5 font-medium text-fg-primary">{formatRange(r.worst.annualSavingsUSD, r.best.annualSavingsUSD, formatUSD)}</td>
+                  <td className="py-1.5 font-medium text-fg-primary">
+                    {r.best.paybackYears === null && r.worst.paybackYears === null
+                      ? "Never"
+                      : paybackLabel(r.best, inputs.horizonYears) === paybackLabel(r.worst, inputs.horizonYears)
+                        ? paybackLabel(r.best, inputs.horizonYears)
+                        : `${paybackLabel(r.best, inputs.horizonYears)} – ${paybackLabel(r.worst, inputs.horizonYears)}`}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="mt-1.5 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-600">
+          <p className="mt-1.5 text-[10px] leading-relaxed text-fg-muted">
             Each row re-runs the same ROI calculation using only that intervention&apos;s quantity, holding your other
-            assumptions fixed — not a separate model.
+            assumptions fixed — not a separate model. Tree/canopy rows show a range from the researched cooling
+            estimate; solar has no canopy basis so it shows a single value.
           </p>
         </>
       )}
@@ -778,11 +996,37 @@ export default function RoiPanel({ row, bbox }: { row: SiteRow; bbox: [number, n
   }, []);
 
   const areaM2 = row.site_area_m2 ?? 0;
-  // Live recompute — unchanged from before. Run Simulation (below) doesn't
-  // gate this; it forces an immediate save + visible confirmation instead of
-  // waiting for the debounce, since the computation itself is already
-  // reactive on every input change.
-  const result = useMemo(() => simulateROI(inputs, areaM2), [inputs, areaM2]);
+
+  // Canopy added by this scenario (trees + explicit canopy m²) as a % of
+  // site area — drives the researched cooling-range lookup below. Solar-only
+  // scenarios have no canopy basis, so they fall back to the old manual
+  // expectedCoolingC input (low === high, i.e. a flat number, not a range).
+  const canopyAddedPct = useMemo(
+    () => estimateCanopyAddedPct(inputs, areaM2, CANOPY_AREA_PER_TREE_M2),
+    [inputs, areaM2],
+  );
+  const coolingRange = useMemo(
+    () =>
+      canopyAddedPct > 0
+        ? estimateCanopyCoolingRangeC(canopyAddedPct)
+        : { lowC: inputs.expectedCoolingC, highC: inputs.expectedCoolingC },
+    [canopyAddedPct, inputs.expectedCoolingC],
+  );
+  const solarWarning = useMemo(() => checkSolarCapacityWarning(inputs.solarKW, areaM2 || null), [inputs.solarKW, areaM2]);
+
+  // Live recompute — unchanged math from before, just called twice (once per
+  // end of the researched cooling range) instead of once. Run Simulation
+  // (below) doesn't gate this; it forces an immediate save + visible
+  // confirmation instead of waiting for the debounce, since the computation
+  // itself is already reactive on every input change.
+  const bestResult = useMemo(
+    () => simulateROI({ ...inputs, expectedCoolingC: coolingRange.highC }, areaM2),
+    [inputs, areaM2, coolingRange.highC],
+  );
+  const worstResult = useMemo(
+    () => simulateROI({ ...inputs, expectedCoolingC: coolingRange.lowC }, areaM2),
+    [inputs, areaM2, coolingRange.lowC],
+  );
 
   function set<K extends keyof ROIInputs>(key: K, value: ROIInputs[K]) {
     setInputs((prev) => ({ ...prev, [key]: value }));
@@ -810,39 +1054,47 @@ export default function RoiPanel({ row, bbox }: { row: SiteRow; bbox: [number, n
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-baseline justify-between border-b border-neutral-200 pb-2 dark:border-neutral-800">
+      <div className="flex items-baseline justify-between border-b border-border-subtle pb-2 ">
         <div>
-          <h1 className="text-sm font-semibold text-neutral-900 dark:text-white">Heat Mitigation Planner</h1>
-          <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+          <h1 className="text-sm font-semibold text-fg-primary">Heat Mitigation Planner</h1>
+          <p className="text-[11px] text-fg-muted">
             Site evidence → HeatOps recommendation → your scenario → run simulation → result
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-[0.9fr_1.1fr_1.1fr]">
-        <SiteEvidencePanel metrics={recommendation.metrics} row={row} />
-        <RecommendationPanel recommendation={recommendation} onUseRecommendation={useRecommendedScenario} />
-        <div className="md:col-span-2 lg:col-span-1">
-          <ScenarioPanel
-            inputs={inputs}
-            set={set}
-            onReset={resetCustomScenario}
-            onRun={runSimulation}
-            hasUnsavedChanges={hasUnsavedChanges}
-            saveState={saveState}
-            saveNote={saveNote}
-          />
+      {/* Plain wrapper, not motion.div (project.md §5 follow-up) — cards no
+          longer fade/slide in on mount; only the content *inside* each card
+          (charts, count-up numbers) still animates. */}
+      <div className="flex flex-col gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-[0.9fr_1.1fr_1.1fr]">
+          <SiteEvidencePanel metrics={recommendation.metrics} row={row} />
+          <RecommendationPanel recommendation={recommendation} onUseRecommendation={useRecommendedScenario} />
+          <div className="md:col-span-2 lg:col-span-1">
+            <ScenarioPanel
+              inputs={inputs}
+              set={set}
+              onReset={resetCustomScenario}
+              onRun={runSimulation}
+              hasUnsavedChanges={hasUnsavedChanges}
+              saveState={saveState}
+              saveNote={saveNote}
+              canopyAddedPct={canopyAddedPct}
+              coolingRange={coolingRange}
+              solarWarning={solarWarning}
+            />
+          </div>
+        </div>
+
+        <ResultStrip bestResult={bestResult} worstResult={worstResult} inputs={inputs} justRan={justRan} />
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <PaybackTrajectoryPanel bestResult={bestResult} worstResult={worstResult} horizonYears={inputs.horizonYears} />
+          <InterventionComparisonPanel inputs={inputs} areaM2={areaM2} />
         </div>
       </div>
 
-      <ResultStrip result={result} inputs={inputs} justRan={justRan} />
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <PaybackTrajectoryPanel result={result} horizonYears={inputs.horizonYears} />
-        <InterventionComparisonPanel inputs={inputs} areaM2={areaM2} />
-      </div>
-
-      <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-600">
+      <p className="text-[10px] leading-relaxed text-fg-muted">
         Cooling reduction and energy savings are ESTIMATED from the assumptions in Your Scenario, not measured —
         HeatOps does not directly measure the actual cooling or energy impact of any intervention.
       </p>

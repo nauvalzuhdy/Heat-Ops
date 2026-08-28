@@ -1,5 +1,9 @@
 "use client";
 
+// App shell header (visual redesign, Phase 1 — design system + shell).
+// Restyled onto the new bg-app/bg-surface/accent tokens (app/globals.css,
+// tailwind.config.ts); no change to what this renders or does — still the
+// sidebar-reopen toggle, brand mark, breadcrumb, and theme toggle.
 import { useUIStore } from "@/store/uiStore";
 
 // Both icons always render; the "dark" class on <html> (applied before
@@ -36,39 +40,38 @@ export default function Header({ title = "Map View" }: { title?: string }) {
   const toggleTheme = useUIStore((s) => s.toggleTheme);
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white px-4 dark:border-neutral-800 dark:bg-neutral-950">
-      {/* The "close" toggle now lives at the bottom of AppSidebar (fills its
-          previously-empty footer space) — this button only needs to exist
-          here as the "reopen" affordance once the sidebar is fully
-          collapsed (w-0), since at that point its own toggle is clipped. */}
-      {!sidebarOpen && (
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          aria-label="Open sidebar"
-          aria-pressed={sidebarOpen}
-          className="rounded-md p-2 text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-white"
-        >
-          <PanelToggleIcon />
-        </button>
-      )}
+    <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface px-5">
+      {/* Single toggle, always in this exact top-left slot whether the
+          sidebar is open or closed — previously "open" lived here but
+          "close" was a separate button buried at the bottom of AppSidebar,
+          an inconsistent position. One button, one position, aria-label and
+          pressed-state reflect which action it currently performs. */}
+      <button
+        type="button"
+        onClick={toggleSidebar}
+        aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+        aria-pressed={sidebarOpen}
+        className="rounded-btn p-2 text-fg-muted transition-colors duration-200 hover:bg-surface-2 hover:text-fg-primary"
+      >
+        <PanelToggleIcon />
+      </button>
 
-      <div className="flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-orange-500 text-xs font-bold text-white">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-7 w-7 items-center justify-center rounded-card-sm bg-accent text-xs font-bold text-accent-fg">
           H
         </div>
-        <span className="text-sm font-semibold text-neutral-900 dark:text-white">HeatOps</span>
+        <span className="text-sm font-semibold text-fg-primary">HeatOps</span>
       </div>
 
-      <span className="text-neutral-300 dark:text-neutral-700">/</span>
-      <span className="text-sm text-neutral-500 dark:text-neutral-400">{title}</span>
+      <span className="text-border-strong">/</span>
+      <span className="text-sm text-fg-secondary">{title}</span>
 
       <div className="ml-auto flex items-center gap-2">
         <button
           type="button"
           onClick={toggleTheme}
           aria-label="Toggle color theme"
-          className="rounded-md p-2 text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-white"
+          className="rounded-btn p-2 text-fg-muted transition-colors duration-200 hover:bg-surface-2 hover:text-fg-primary"
         >
           <SunIcon className="hidden dark:block" />
           <MoonIcon className="block dark:hidden" />

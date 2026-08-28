@@ -15,7 +15,24 @@ import type { Polygon } from "geojson";
 import type { HeatmapResult, SatelliteSegmentationResult } from "./fortyguard";
 import type { OverpassLandCover } from "./overpass";
 
-export type HeatTileRecord = { lat: number; lng: number; tempC: number };
+export type HeatTileRecord = {
+  lat: number;
+  lng: number;
+  tempC: number;
+  /**
+   * [west, south, east, north] of this tile's own FortyGuard polygon
+   * (map_data.features[i].geometry — confirmed a real per-tile Polygon
+   * against a live API response, not a center-point-only shape; see
+   * lib/fortyguard.ts's HeatmapResult comment). Optional because it was
+   * added after some sites were already saved — those rows only have the
+   * centroid (lat/lng) below, which is all binTilesToZones() and every
+   * consumer of it (Shift Schedule, ROI Simulator, recommend_intervention,
+   * AI Copilot tools) ever reads; this field is purely additive for the
+   * Hotspot Detection page's pixel-grid visualization and changes nothing
+   * about how those consumers bin/read tiles.
+   */
+  bounds?: [number, number, number, number];
+};
 
 // §4.4 — one resolved forecast slot, matching the `sites.heat_forecast`
 // column. Written via PATCH /api/sites once Map View's Analyze action
@@ -39,6 +56,11 @@ export type HeatForecastEntry = {
   meanTempC: number;
   cached: boolean;
   capturedAt: string;
+  // See project.md §2/§4.4 — this slot's date shifted back one day because
+  // "today" returned no usable FortyGuard data. Consumers must label a
+  // fallback entry as what it is, never show it as today's forecast.
+  dateUsed: string;
+  isFallbackDate: boolean;
 };
 
 export type SiteLandcover = {
@@ -80,6 +102,12 @@ export type SiteRecord = {
     stdDevC: number;
     tileCount: number;
     capturedAt: string;
+    // See project.md §2/§4.4 — the actual date_time.start_date this snapshot
+    // came from, and whether it's the app's default "today" request or the
+    // one-step yesterday fallback. Any consumer showing this data as
+    // "current" must check isFallbackDate and label it honestly if true.
+    dateUsed: string;
+    isFallbackDate: boolean;
   } | null;
   attribution: {
     landcover: "real" | "unavailable";
@@ -90,7 +118,9 @@ export type SiteRecord = {
 
 // Mirrors the discriminated union the analysis store already carries, without
 // importing the store into what is otherwise a pure module.
-type Maybe<T> = { status: "ok"; result: T; cached?: boolean } | { status: "error"; message: string };
+type Maybe<T> =
+  | { status: "ok"; result: T; cached?: boolean; dateUsed?: string; isFallbackDate?: boolean }
+  | { status: "error"; message: string };
 
 function centroidOfRing(ring: number[][]): { lat: number; lng: number } {
   let lat = 0;
@@ -103,6 +133,20 @@ function centroidOfRing(ring: number[][]): { lat: number; lng: number } {
     lat += ring[i][1];
   }
   return { lat: lat / n, lng: lng / n };
+}
+
+function boundsOfRing(ring: number[][]): [number, number, number, number] {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const [lng, lat] of ring) {
+    if (lng < west) west = lng;
+    if (lng > east) east = lng;
+    if (lat < south) south = lat;
+    if (lat > north) north = lat;
+  }
+  return [west, south, east, north];
 }
 
 export function buildSiteRecord(input: {
@@ -119,12 +163,20 @@ export function buildSiteRecord(input: {
   const heatTiles: HeatTileRecord[] =
     heatmap.status === "ok"
       ? heatmap.result.map_data.features.map((f) => {
-          const c = centroidOfRing(f.geometry.coordinates[0]);
-          return { lat: c.lat, lng: c.lng, tempC: f.properties.average_temperature };
+          const ring = f.geometry.coordinates[0];
+          const c = centroidOfRing(ring);
+          return {
+            lat: c.lat,
+            lng: c.lng,
+            tempC: f.properties.average_temperature,
+            bounds: boundsOfRing(ring),
+          };
         })
       : [];
 
   const stats = heatmap.status === "ok" ? heatmap.result.stats_data.temperature_stats : null;
+  const heatDateUsed = heatmap.status === "ok" ? heatmap.dateUsed : undefined;
+  const heatIsFallbackDate = heatmap.status === "ok" ? heatmap.isFallbackDate : undefined;
 
   return {
     name: input.name ?? null,
@@ -168,6 +220,8 @@ export function buildSiteRecord(input: {
           stdDevC: stats.standard_deviation,
           tileCount: heatTiles.length,
           capturedAt: new Date().toISOString(),
+          dateUsed: heatDateUsed ?? "",
+          isFallbackDate: Boolean(heatIsFallbackDate),
         }
       : null,
 
