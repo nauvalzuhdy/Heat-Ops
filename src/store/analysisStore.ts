@@ -246,10 +246,19 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     const requestId = ++latestForecastRequestId;
     set({ capturingForecast: true });
 
-    const results = await Promise.all(
-      FORECAST_HOUR_OFFSETS.map(
-        async (hourOffset) => [hourOffset, await fetchForecastSlot(geometry, hourOffset, daysBackHint)] as const
-      )
+    // Each slot is committed to the store the moment IT resolves, not batched
+    // until all five have. The five requests already ran in parallel, but a
+    // single set() after Promise.all meant nothing appeared for 20-30s and then
+    // everything did at once — which read as "no feedback, then a sudden jump"
+    // and left the progress bar below stuck at 0/5 for the whole window.
+    // Same latest-wins ticket as before: a superseded run drops its slot rather
+    // than writing over a newer capture.
+    await Promise.all(
+      FORECAST_HOUR_OFFSETS.map(async (hourOffset) => {
+        const slot = await fetchForecastSlot(geometry, hourOffset, daysBackHint);
+        if (requestId !== latestForecastRequestId) return;
+        set((state) => ({ heatForecast: { ...state.heatForecast, [hourOffset]: slot } }));
+      })
     );
 
     if (requestId !== latestForecastRequestId) {
@@ -258,11 +267,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       return;
     }
 
-    set((state) => {
-      const heatForecast = { ...state.heatForecast };
-      for (const [hourOffset, slot] of results) heatForecast[hourOffset] = slot;
-      return { heatForecast, capturingForecast: false };
-    });
+    set({ capturingForecast: false });
   },
   analyzeAOI: async (geometry) => {
     const requestId = ++latestRequestId;

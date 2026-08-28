@@ -124,9 +124,34 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const POLL_BACKOFF_MS = [3000, 6000, 12000];
 const POLL_MAX_ATTEMPTS = 10;
 
-async function pollUntilDone<TResult>(activityId: string): Promise<TResult> {
-  for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
-    await sleep(POLL_BACKOFF_MS[Math.min(attempt, POLL_BACKOFF_MS.length - 1)]);
+/**
+ * Thrown when we stop polling before FortyGuard reached a terminal state —
+ * distinct from an activity that actually reported Failed. Callers need to tell
+ * these apart: "we stopped waiting" says nothing about the request, whereas
+ * "Failed" is a real answer about it.
+ */
+export class FortyGuardPollTimeoutError extends Error {
+  constructor(activityId: string, waitedMs: number) {
+    super(
+      `FortyGuard activity ${activityId} still processing after ` +
+        `${Math.round(waitedMs / 1000)}s — stopped waiting.`,
+    );
+    this.name = "FortyGuardPollTimeoutError";
+  }
+}
+
+async function pollUntilDone<TResult>(
+  activityId: string,
+  opts?: { backoffMs?: number[]; maxAttempts?: number },
+): Promise<TResult> {
+  const backoff = opts?.backoffMs ?? POLL_BACKOFF_MS;
+  const maxAttempts = opts?.maxAttempts ?? POLL_MAX_ATTEMPTS;
+  let waited = 0;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const delay = backoff[Math.min(attempt, backoff.length - 1)];
+    await sleep(delay);
+    waited += delay;
 
     const data = await checkStatus<TResult>(activityId);
     if (data.status === "Completed") {
@@ -140,7 +165,7 @@ async function pollUntilDone<TResult>(activityId: string): Promise<TResult> {
     }
     // otherwise "Processing" — keep polling
   }
-  throw new Error(`FortyGuard activity ${activityId} timed out after ${POLL_MAX_ATTEMPTS} polls`);
+  throw new FortyGuardPollTimeoutError(activityId, waited);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +311,22 @@ export function relativeHumidityAt(result: EnvParamsResult, targetTimeIso: strin
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+// Measured against the live API on 2026-08-29: four /v1/satellite activities
+// across two US locations and three dates each sat in "Processing" for 174-181s
+// and then returned "Failed". The shared 105s budget therefore never sees a
+// terminal state for this endpoint at all — it gives up ~76s early and reports a
+// timeout, which is why the real outcome was invisible.
+//
+// Waiting the full ~180s is the wrong answer though: /api/landcover holds the
+// Analyze run until BOTH its calls settle, so a segmentation that is going to
+// fail would stall every analysis by three minutes to learn nothing. This
+// budget is deliberately shorter than the shared one: a segmentation that is
+// coming back quickly still lands, and one that is not degrades to "spot-check
+// unavailable" fast enough to keep the run usable. Raise it if FortyGuard's
+// satellite latency improves.
+const SATELLITE_POLL_BACKOFF_MS = [3000, 6000, 9000];
+const SATELLITE_POLL_MAX_ATTEMPTS = 6; // 3+6+9+9+9+9 = 45s
+
 export async function runSatelliteSegmentation(params: {
   latitude: number;
   longitude: number;
@@ -300,7 +341,10 @@ export async function runSatelliteSegmentation(params: {
   logMode("/v1/satellite");
   const activityId = await submitSatelliteSegmentation(params);
   try {
-    const result = await pollUntilDone<SatelliteSegmentationResult>(activityId);
+    const result = await pollUntilDone<SatelliteSegmentationResult>(activityId, {
+      backoffMs: SATELLITE_POLL_BACKOFF_MS,
+      maxAttempts: SATELLITE_POLL_MAX_ATTEMPTS,
+    });
     return { cached: false, result };
   } catch (err) {
     console.error(`FortyGuard satellite segmentation activity_id=${activityId} error:`, err);
@@ -509,13 +553,18 @@ export async function runSatelliteWithDateFallback(params: {
       }
       console.warn(`[FortyGuard] satellite ${startDate} returned an empty segmentation.`);
     } catch (err) {
-      // A Failed activity or a rejected submit for one date says nothing about
-      // the previous day, so keep walking instead of giving up here — but hold
-      // on to the error so the final message is the real one, not a generic.
       lastError = err;
       console.warn(
         `[FortyGuard] satellite ${startDate} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      // Stopping early on a timeout is the whole point of separating the two
+      // error kinds. A Failed activity is an answer ABOUT that date, so trying
+      // an earlier one is reasonable; a timeout means the endpoint is not
+      // answering at all right now, and re-asking it for four different dates
+      // just multiplies the wait the user is sitting through. Measured
+      // 2026-08-29: every date behaved identically, so the walk had nothing to
+      // find and only cost time.
+      if (err instanceof FortyGuardPollTimeoutError) break;
     }
   }
 

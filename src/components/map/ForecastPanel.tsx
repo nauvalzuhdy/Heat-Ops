@@ -129,6 +129,12 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
 
   useEffect(() => {
     if (!siteId) return;
+    // Slots now land one at a time (analysisStore's captureFullForecast), so
+    // without this gate the effect would fire per slot and PATCH five times —
+    // and each PATCH that finds a slot without stored humidity spends another
+    // FortyGuard /v1/env_params call (app/api/sites/route.ts). Waiting for the
+    // window to finish keeps it at exactly one PATCH per capture, as before.
+    if (capturingForecast) return;
 
     const okOffsets = FORECAST_HOUR_OFFSETS.filter((h) => heatForecast[h]?.status === "ok");
     const hasNewOffset = okOffsets.some((h) => !syncedOffsetsRef.current.has(h));
@@ -160,7 +166,7 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
         syncedOffsetsRef.current = new Set(okOffsets);
       })
       .catch((err) => console.error("[forecast] failed to sync heat_forecast to site record:", err));
-  }, [heatForecast, siteId]);
+  }, [heatForecast, siteId, capturingForecast]);
 
   const selectedSlot = selectedHourOffset !== null ? heatForecast[selectedHourOffset] : undefined;
   const sparklinePoints = FORECAST_HOUR_OFFSETS.filter((h) => heatForecast[h]?.status === "ok").map((h) => {
