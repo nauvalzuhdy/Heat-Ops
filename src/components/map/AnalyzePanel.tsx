@@ -339,7 +339,23 @@ export default function AnalyzePanel() {
                 Operational Analyst page as one extra reference point, never as
                 the primary land-cover source. Overpass's footprint
                 cross-check above is the only land-cover figure shown here.
+
+                Its FAILURE is surfaced, though — see below. Not surfacing the
+                numbers is about not passing a centroid patch off as an AOI-wide
+                breakdown; silently swallowing the whole call failing is a
+                different thing, and it is how sites ended up saved with no
+                tree-canopy data at all, only discovered later in Operational
+                Analyst as "segmentation isn't available for this site yet".
               */}
+              {status === "success" && data?.satellite.status === "error" && (
+                <div className="rounded-lg border border-status-cached/40 bg-status-cached-bg px-3 py-2.5 text-[11px] leading-relaxed text-status-cached">
+                  <span className="font-medium">Tree-canopy spot-check unavailable for this run.</span>{" "}
+                  FortyGuard&apos;s satellite segmentation did not return for this AOI, so a site saved now will
+                  have no tree-canopy percentage — and Operational Analyst will show no canopy
+                  recommendation or its ROI. The heat analysis above is unaffected. Re-running Analyze later
+                  usually resolves it.
+                </div>
+              )}
 
               {namePrompted && !nameModalOpen && siteSaveStatus === "idle" && (
                 <button

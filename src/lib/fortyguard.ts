@@ -417,6 +417,116 @@ function shiftDateString(dateStr: string, deltaDays: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * A segmentation that completed but carries no classes — the satellite equivalent
+ * of the heatmap's `n_cells: 0` empty result. Treated as "no data for this
+ * date" so the caller can fall back, rather than being stored as a real
+ * spot-check with nothing in it.
+ */
+function isDegenerateSatelliteResult(result: SatelliteSegmentationResult): boolean {
+  const segments = result?.segmentation?.segments;
+  return !segments || Object.keys(segments).length === 0;
+}
+
+export type SatelliteWithDateFallback = {
+  cached: boolean;
+  result: SatelliteSegmentationResult;
+  /** The date the returned segmentation is actually FOR — not necessarily the one requested. */
+  dateUsed: string;
+  isFallbackDate: boolean;
+};
+
+/**
+ * Walks backward day-by-day until /v1/satellite actually returns a
+ * segmentation, exactly as runHeatmapWithDateFallback() already does for
+ * /v1/heatmap.
+ *
+ * Why this exists: the two calls were asymmetric. The heatmap has walked back
+ * up to MAX_HEATMAP_DAYS_BACK since the availability-lag investigation, but the
+ * satellite call was still pinned to `new Date()` with no fallback at all
+ * (app/api/landcover/route.ts). FortyGuard's availability lag is variable and
+ * applies to both endpoints, so on a day when same-day data was not ready yet
+ * the heatmap quietly recovered and the segmentation just failed — which is
+ * precisely the "FortyGuard satellite segmentation isn't available for this site
+ * yet" state seen on sites whose heatmap came back fine. Losing the
+ * segmentation loses the tree-canopy percentage, and with it the entire canopy
+ * recommendation and its ROI, so a whole half of the product went missing for a
+ * reason that had nothing to do with the site.
+ *
+ * Credit behaviour is the same as the heatmap walk: a task that Fails costs
+ * nothing, and a date is only retried when the previous one produced no usable
+ * segmentation. The search is capped at the same MAX_HEATMAP_DAYS_BACK.
+ *
+ * It is ALSO capped in wall-clock time, which the heatmap walk does not need to
+ * be. A single poll cycle can run to POLL_MAX_ATTEMPTS (~105s) before giving up,
+ * so a naive four-date walk over repeated timeouts would spend ~7 minutes — and
+ * /api/landcover is one of the two requests the user is already waiting on.
+ * Walking back helps when a date genuinely has no data yet (fast, cheap answers);
+ * it does not help when the endpoint is simply slow, so once the budget is spent
+ * this stops and reports rather than compounding the wait.
+ */
+/**
+ * Wall-clock budget for ADDITIONAL date attempts (the first is always made).
+ * Sized just under one full poll cycle so a single slow-but-successful call is
+ * never cut short, while a chain of timeouts cannot stack up.
+ */
+const SATELLITE_FALLBACK_BUDGET_MS = 90_000;
+
+export async function runSatelliteWithDateFallback(params: {
+  latitude: number;
+  longitude: number;
+  startDate: string;
+  granularity: 60 | 80 | 100;
+  maxDaysBack?: number;
+}): Promise<SatelliteWithDateFallback> {
+  const maxDaysBack = params.maxDaysBack ?? MAX_HEATMAP_DAYS_BACK;
+  const attempted: string[] = [];
+  let lastError: unknown = null;
+  const startedAt = Date.now();
+
+  for (let daysBack = 0; daysBack <= maxDaysBack; daysBack++) {
+    // Never skips the first date — only additional walk-back attempts are budgeted.
+    if (daysBack > 0 && Date.now() - startedAt > SATELLITE_FALLBACK_BUDGET_MS) {
+      console.warn(
+        `[FortyGuard] satellite date walk-back stopped after ` +
+          `${Math.round((Date.now() - startedAt) / 1000)}s — budget spent, not retrying further dates.`,
+      );
+      break;
+    }
+
+    const startDate = shiftDateString(params.startDate, -daysBack);
+    attempted.push(startDate);
+
+    try {
+      const attempt = await runSatelliteSegmentation({ ...params, startDate });
+      if (attempt.cached || !isDegenerateSatelliteResult(attempt.result)) {
+        if (daysBack > 0) {
+          console.warn(
+            `[FortyGuard] satellite using ${startDate} (${daysBack} day(s) back from ${params.startDate}).`,
+          );
+        }
+        return { cached: attempt.cached, result: attempt.result, dateUsed: startDate, isFallbackDate: daysBack > 0 };
+      }
+      console.warn(`[FortyGuard] satellite ${startDate} returned an empty segmentation.`);
+    } catch (err) {
+      // A Failed activity or a rejected submit for one date says nothing about
+      // the previous day, so keep walking instead of giving up here — but hold
+      // on to the error so the final message is the real one, not a generic.
+      lastError = err;
+      console.warn(
+        `[FortyGuard] satellite ${startDate} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  throw new Error(
+    `No satellite segmentation available from FortyGuard for ${attempted.length} date(s) tried ` +
+      `(${attempted[0]} back to ${attempted[attempted.length - 1]})` +
+      (lastError instanceof Error ? ` — last error: ${lastError.message}` : "") +
+      ` — try again later.`,
+  );
+}
+
 export type HeatmapWithDateFallback = {
   cached: boolean;
   result: HeatmapResult;
