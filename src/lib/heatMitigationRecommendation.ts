@@ -58,6 +58,18 @@ export type SiteMetrics = {
   buildingPct: number | null;
   buildingAreaM2: number | null;
 
+  /**
+   * Share of the AOI that physically cannot take new tree canopy: building
+   * footprints, roads, and open water, from Overpass's real AOI-wide breakdown.
+   * You cannot plant a tree on a process unit, a haul road, or a ship channel,
+   * and a recommendation that ignores this is asking for something impossible.
+   * null when land cover is unknown — in which case no cap is applied at all,
+   * rather than a guessed one.
+   */
+  unplantablePct: number | null;
+  /** Site area minus those surfaces. null when land cover is unknown. */
+  plantableAreaM2: number | null;
+
   /** Share of this AOI's captured heat tiles falling in Hotspot Detection's Critical/High zones, scaled to real area. */
   hotspotAreaM2: number | null;
   hotspotFractionOfTiles: number | null;
@@ -102,7 +114,11 @@ function computeHotspotMetrics(
 
 export function deriveSiteMetrics(input: {
   siteAreaM2: number | null;
-  landcover: { buildingPct: number; vegetationPct: number } | null;
+  // roadPct/waterPct are optional so a caller passing a narrower land-cover
+  // object still compiles; a missing value is treated as 0, which means "no
+  // known unplantable surface" and therefore no cap — the pre-existing
+  // behaviour, never a guess in the restrictive direction.
+  landcover: { buildingPct: number; vegetationPct: number; roadPct?: number; waterPct?: number } | null;
   landcoverSpotcheck: { segments: Record<string, number>; synthetic: boolean } | null;
   heatTiles: HeatTileRecord[] | null;
   bbox: [number, number, number, number] | null;
@@ -124,6 +140,21 @@ export function deriveSiteMetrics(input: {
   const buildingAreaM2 =
     input.landcover != null && input.siteAreaM2 != null ? input.siteAreaM2 * (input.landcover.buildingPct / 100) : null;
 
+  const unplantablePct =
+    input.landcover != null
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            input.landcover.buildingPct + (input.landcover.roadPct ?? 0) + (input.landcover.waterPct ?? 0),
+          ),
+        )
+      : null;
+  const plantableAreaM2 =
+    unplantablePct != null && input.siteAreaM2 != null
+      ? input.siteAreaM2 * ((100 - unplantablePct) / 100)
+      : null;
+
   const hotspot = computeHotspotMetrics(input.heatTiles, input.bbox, input.siteAreaM2);
 
   return {
@@ -134,6 +165,8 @@ export function deriveSiteMetrics(input: {
     greenCoveragePct: input.landcover?.vegetationPct ?? null,
     buildingPct: input.landcover?.buildingPct ?? null,
     buildingAreaM2,
+    unplantablePct,
+    plantableAreaM2,
     ...hotspot,
   };
 }
@@ -157,12 +190,31 @@ export type TreeCanopyRecommendation =
       recommendedTrees: number;
       /**
        * Canopy area needed to close the SAME gap, expressed in m² instead of
-       * tree count (recommendedCanopyM2 === Math.round(deficitAreaM2)) — an
-       * alternative unit for one recommendation, not a second, additive
-       * intervention. Applying both recommendedTrees AND recommendedCanopyM2
-       * into the ROI form at once would double-count this deficit.
+       * tree count — an alternative unit for one recommendation, not a second,
+       * additive intervention. Applying both recommendedTrees AND
+       * recommendedCanopyM2 into the ROI form at once would double-count it.
+       *
+       * This is the deficit CAPPED by what is physically plantable, so it can be
+       * smaller than deficitAreaM2 — see benchmarkUnreachable.
        */
       recommendedCanopyM2: number;
+      /**
+       * True when the benchmark cannot be reached on this site at all: too much
+       * of it is building, road, or water for the full gap to be planted. The
+       * recommendation is then the most that physically fits, and must be
+       * labelled as such rather than presented as closing the gap.
+       */
+      benchmarkUnreachable: boolean;
+      /** Plantable area not already under canopy. null when land cover is unknown (no cap applied). */
+      availablePlantableM2: number | null;
+      /**
+       * Human-readable disclosure of the plantable-area constraint, or null when
+       * land cover is unknown. A NAMED field rather than another entry in
+       * `explanation`, because RoiPanel.tsx renders that array by index
+       * (explanation[0], explanation[1]) — appending to it silently displaces the
+       * hotspot-context footnote instead of adding a line.
+       */
+      plantableNote: string | null;
       dataSynthetic: boolean;
     }
   | { status: "benchmark_met"; currentTreeCanopyPct: number; targetTreeCanopyPct: number; dataSynthetic: boolean }
@@ -186,7 +238,33 @@ function recommendTreeCanopy(metrics: SiteMetrics): TreeCanopyRecommendation {
   }
 
   const deficitAreaM2 = metrics.siteAreaM2 * (deficitPct / 100);
-  const recommendedTrees = Math.max(1, Math.ceil(deficitAreaM2 / CANOPY_AREA_PER_TREE_M2));
+
+  // Cap the recommendation at what can actually be planted. Existing canopy
+  // already occupies part of the plantable surface, so it is subtracted rather
+  // than counted as free ground. With no land-cover data there is no cap —
+  // unchanged behaviour, not a guessed restriction.
+  const existingCanopyM2 = metrics.siteAreaM2 * (metrics.treeCanopyPct / 100);
+  const availablePlantableM2 =
+    metrics.plantableAreaM2 != null ? Math.max(0, metrics.plantableAreaM2 - existingCanopyM2) : null;
+  const plantableAreaM2 = availablePlantableM2 != null ? Math.min(deficitAreaM2, availablePlantableM2) : deficitAreaM2;
+  const benchmarkUnreachable = availablePlantableM2 != null && availablePlantableM2 < deficitAreaM2;
+
+  // Math.max(1, ...) is kept only for a genuine deficit that rounds below one
+  // tree; a site with literally no plantable ground gets 0, not a token tree
+  // it has nowhere to put.
+  const recommendedTrees =
+    plantableAreaM2 <= 0 ? 0 : Math.max(1, Math.ceil(plantableAreaM2 / CANOPY_AREA_PER_TREE_M2));
+
+  const plantableNote =
+    metrics.unplantablePct == null
+      ? null
+      : benchmarkUnreachable
+        ? `About ${metrics.unplantablePct.toFixed(0)}% of this site is building, road, or open water, so the ` +
+          `${TARGET_TREE_CANOPY_PCT}% benchmark cannot physically be reached here. The recommendation is capped ` +
+          `at the ${Math.round(availablePlantableM2 ?? 0).toLocaleString()} m² that is actually plantable — it ` +
+          `closes part of the gap, not all of it.`
+        : `About ${metrics.unplantablePct.toFixed(0)}% of this site is building, road, or open water and cannot ` +
+          `take new canopy; this recommendation fits within the remaining plantable ground.`;
 
   return {
     status: "deficit",
@@ -195,7 +273,10 @@ function recommendTreeCanopy(metrics: SiteMetrics): TreeCanopyRecommendation {
     deficitPct,
     deficitAreaM2,
     recommendedTrees,
-    recommendedCanopyM2: Math.round(deficitAreaM2),
+    recommendedCanopyM2: Math.round(plantableAreaM2),
+    benchmarkUnreachable,
+    availablePlantableM2,
+    plantableNote,
     dataSynthetic: metrics.treeCanopySynthetic,
   };
 }

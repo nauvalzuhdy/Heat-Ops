@@ -204,14 +204,36 @@ function RecommendationPanel({
           {explanation[0] && (
             <p className="mt-2 text-xs leading-relaxed text-fg-secondary">{explanation[0]}</p>
           )}
+          {/* Plantable-area constraint. Rendered from its own named field, not
+              appended to `explanation`, because the array below is read by index. */}
+          {treeCanopy.plantableNote && (
+            <p
+              className={`mt-1.5 text-xs leading-relaxed ${
+                treeCanopy.benchmarkUnreachable ? "text-severity-caution" : "text-fg-muted"
+              }`}
+            >
+              {treeCanopy.plantableNote}
+            </p>
+          )}
           <div className="mt-2 flex flex-col divide-y divide-border-subtle">
             <RecommendationLine icon="🌳" label="Recommended" value={`+${treeCanopy.recommendedTrees.toLocaleString()} trees`} />
             <RecommendationLine icon="☂" label="Alternative" value={`+${treeCanopy.recommendedCanopyM2.toLocaleString()} m² canopy`} />
             <RecommendationLine icon="☀" label="Solar" value="Custom scenario" muted />
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-fg-muted">
-            Trees and canopy close the same estimated {Math.round(treeCanopy.deficitAreaM2).toLocaleString()} m² gap —
-            two equivalent units of one recommendation, not additive line items.
+            {treeCanopy.benchmarkUnreachable ? (
+              <>
+                Trees and canopy are two equivalent units of one recommendation, not additive line items. They
+                cover {treeCanopy.recommendedCanopyM2.toLocaleString()} m² of the estimated{" "}
+                {Math.round(treeCanopy.deficitAreaM2).toLocaleString()} m² gap — the most this site has room for.
+              </>
+            ) : (
+              <>
+                Trees and canopy close the same estimated{" "}
+                {Math.round(treeCanopy.deficitAreaM2).toLocaleString()} m² gap — two equivalent units of one
+                recommendation, not additive line items.
+              </>
+            )}
           </p>
           <button
             type="button"

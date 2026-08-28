@@ -658,6 +658,10 @@ function RecommendationSection({ recommendation }: { recommendation: SiteReportD
           {treeCanopy.recommendedCanopyM2.toLocaleString()} m² artificial canopy — same gap, alternate unit, not
           additive). Solar: custom scenario (no roof-area basis available to auto-size).
         </Text>
+        {/* Plantable-area constraint, same wording as the dashboard's Heat
+            Mitigation Planner — a report that recommends planting over buildings,
+            roads and water without saying so is recommending the impossible. */}
+        {treeCanopy.plantableNote && <Text style={styles.caveat}>{treeCanopy.plantableNote}</Text>}
         {treeCanopy.dataSynthetic && (
           <Text style={styles.caveat}>Tree-canopy figure is from a cached/synthetic FortyGuard spot-check.</Text>
         )}
