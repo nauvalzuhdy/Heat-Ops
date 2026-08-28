@@ -102,6 +102,7 @@ function measureTileMeters(ring: [number, number][]): { widthM: number; heightM:
 }
 
 export async function POST(request: NextRequest) {
+  const routeStartedAt = performance.now();
   let geometry: Polygon;
   let hourOffset: number | undefined;
   // Optional: "the whole-day analysis for this same AOI just found data N
@@ -197,6 +198,8 @@ export async function POST(request: NextRequest) {
     // actually sent to FortyGuard) or using fetch-completion wall-clock time
     // (wrong concept entirely — that's when the data arrived, not what it's
     // for).
+    const routeLabel = hourOffset === undefined ? "Surface Heatmap" : `Forecast +${hourOffset}h`;
+    console.log(`[/api/heatmap] COMPLETE (${routeLabel}) — ${((performance.now() - routeStartedAt) / 1000).toFixed(1)}s total`);
     return NextResponse.json({
       areaSqKm,
       cached,
@@ -208,6 +211,11 @@ export async function POST(request: NextRequest) {
       daysBack,
     });
   } catch (err) {
+    const routeLabel = hourOffset === undefined ? "Surface Heatmap" : `Forecast +${hourOffset}h`;
+    console.log(
+      `[/api/heatmap] FAILED (${routeLabel}) — ${((performance.now() - routeStartedAt) / 1000).toFixed(1)}s total — ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Heatmap generation failed" },
       { status: 502 }

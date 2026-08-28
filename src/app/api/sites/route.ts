@@ -149,6 +149,8 @@ async function attachMeasuredHumidity(
   siteId: string,
   entries: HeatForecastEntry[],
 ): Promise<HeatForecastEntry[]> {
+  const stepStartedAt = performance.now();
+  const elapsed = () => ((performance.now() - stepStartedAt) / 1000).toFixed(1);
   if (entries.length === 0) return entries;
 
   const supabase = getSupabaseServiceClient();
@@ -178,7 +180,10 @@ async function attachMeasuredHumidity(
     const hit = knownHumidity.get(e.targetTime);
     return hit ? { ...e, relativeHumidityPct: hit.pct, humidityCached: hit.cached } : e;
   });
-  if (withKnown.every((e) => typeof e.relativeHumidityPct === "number")) return withKnown;
+  if (withKnown.every((e) => typeof e.relativeHumidityPct === "number")) {
+    console.log(`[sites] Tree-canopy/humidity step: nothing missing, skipped env_params call (${elapsed()}s)`);
+    return withKnown;
+  }
 
   const geometry = data.aoi_geometry as Polygon | null;
   if (!geometry) return withKnown;
@@ -215,11 +220,14 @@ async function attachMeasuredHumidity(
     });
     console.log(
       `[sites] env_params humidity attached to ${filled}/${withKnown.length} forecast slots` +
-        ` (cached=${cached}, start_date=${startDate})`,
+        ` (cached=${cached}, start_date=${startDate}) — ${elapsed()}s`,
     );
     return enriched;
   } catch (err) {
-    console.error("[sites] env_params humidity enrichment failed, storing slots without it:", err);
+    console.error(
+      `[sites] env_params humidity enrichment failed after ${elapsed()}s, storing slots without it:`,
+      err,
+    );
     return withKnown;
   }
 }

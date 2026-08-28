@@ -140,13 +140,25 @@ export class FortyGuardPollTimeoutError extends Error {
   }
 }
 
+// Performance-investigation instrumentation (2026-08-29). Every endpoint's
+// wait passes through this one function, so timing it here times all of them
+// without touching each call site. Logs only elapsed time and status — never
+// request/response bodies or the api-key header.
+function pollLog(label: string, msg: string) {
+  console.log(`[FortyGuard poll:${label}] ${msg}`);
+}
+
 async function pollUntilDone<TResult>(
   activityId: string,
-  opts?: { backoffMs?: number[]; maxAttempts?: number },
+  opts?: { backoffMs?: number[]; maxAttempts?: number; label?: string },
 ): Promise<TResult> {
   const backoff = opts?.backoffMs ?? POLL_BACKOFF_MS;
   const maxAttempts = opts?.maxAttempts ?? POLL_MAX_ATTEMPTS;
+  const label = opts?.label ?? "unlabeled";
+  const startedAt = performance.now();
   let waited = 0;
+
+  pollLog(label, `START activity=${activityId} budget=${(backoff.reduce((a, b, i) => a + backoff[Math.min(i, backoff.length - 1)], 0) )}...`);
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const delay = backoff[Math.min(attempt, backoff.length - 1)];
@@ -154,17 +166,23 @@ async function pollUntilDone<TResult>(
     waited += delay;
 
     const data = await checkStatus<TResult>(activityId);
+    const elapsedS = ((performance.now() - startedAt) / 1000).toFixed(1);
     if (data.status === "Completed") {
+      pollLog(label, `COMPLETE — ${elapsedS}s, ${attempt + 1} status check(s)`);
       if (!data.result) throw new Error(`FortyGuard activity ${activityId} completed with no result`);
       return data.result;
     }
     if (data.status === "Failed") {
       // Failed tasks don't consume credits, but log the activity_id for debugging.
+      pollLog(label, `FAILED (FortyGuard reported Failed) — ${elapsedS}s, ${attempt + 1} status check(s)`);
       console.error(`FortyGuard activity ${activityId} failed`);
       throw new Error(`FortyGuard activity ${activityId} failed`);
     }
+    pollLog(label, `Processing — ${elapsedS}s elapsed (check ${attempt + 1}/${maxAttempts})`);
     // otherwise "Processing" — keep polling
   }
+  const totalS = ((performance.now() - startedAt) / 1000).toFixed(1);
+  pollLog(label, `TIMEOUT — stopped waiting after ${totalS}s (${maxAttempts} status checks, no terminal state)`);
   throw new FortyGuardPollTimeoutError(activityId, waited);
 }
 
@@ -249,6 +267,14 @@ async function submitEnvParams(params: {
   return body.data.activity_id;
 }
 
+// Same reasoning and shape as SATELLITE_POLL_BACKOFF_MS/MAX_ATTEMPTS below:
+// this is a non-critical-path enrichment call, not the analysis itself, so it
+// must not be able to silently hold app/api/sites/route.ts's PATCH open for
+// the full 105s generic budget. Found via the 2026-08-29 performance trace —
+// this was the one FortyGuard call added this session with no bound of its own.
+const ENV_PARAMS_POLL_BACKOFF_MS = [3000, 6000, 9000];
+const ENV_PARAMS_POLL_MAX_ATTEMPTS = 6; // 3+6+9+9+9+9 = 45s
+
 export async function runEnvParams(params: {
   latitude: number;
   longitude: number;
@@ -261,9 +287,15 @@ export async function runEnvParams(params: {
   }
 
   logMode("/v1/env_params");
+  const submitStartedAt = performance.now();
   const activityId = await submitEnvParams(params);
+  console.log(`[FortyGuard submit:env_params] ${((performance.now() - submitStartedAt) / 1000).toFixed(1)}s — activity=${activityId}`);
   try {
-    const result = await pollUntilDone<EnvParamsResult>(activityId);
+    const result = await pollUntilDone<EnvParamsResult>(activityId, {
+      backoffMs: ENV_PARAMS_POLL_BACKOFF_MS,
+      maxAttempts: ENV_PARAMS_POLL_MAX_ATTEMPTS,
+      label: "env_params",
+    });
     return { cached: false, result };
   } catch (err) {
     console.error(`FortyGuard env_params activity_id=${activityId} error:`, err);
@@ -339,11 +371,14 @@ export async function runSatelliteSegmentation(params: {
   }
 
   logMode("/v1/satellite");
+  const submitStartedAt = performance.now();
   const activityId = await submitSatelliteSegmentation(params);
+  console.log(`[FortyGuard submit:satellite] ${((performance.now() - submitStartedAt) / 1000).toFixed(1)}s — activity=${activityId}`);
   try {
     const result = await pollUntilDone<SatelliteSegmentationResult>(activityId, {
       backoffMs: SATELLITE_POLL_BACKOFF_MS,
       maxAttempts: SATELLITE_POLL_MAX_ATTEMPTS,
+      label: "satellite",
     });
     return { cached: false, result };
   } catch (err) {
@@ -441,9 +476,15 @@ export async function runHeatmapGeneration(params: {
   }
 
   logMode("/v1/heatmap");
+  const submitStartedAt = performance.now();
   const activityId = await submitHeatmap({ ...params, filterType });
+  // Distinguishes the §4.3 whole-day call from a §4.4 forecast slot in the
+  // logs — both go through this same function, and the user-visible labels
+  // are "Surface Heatmap" vs "Forecast +Nh" respectively.
+  const label = params.hourOffset === undefined ? "heatmap:whole-day" : `heatmap:forecast+${params.hourOffset}h`;
+  console.log(`[FortyGuard submit:${label}] ${((performance.now() - submitStartedAt) / 1000).toFixed(1)}s — activity=${activityId}`);
   try {
-    const result = await pollUntilDone<HeatmapResult>(activityId);
+    const result = await pollUntilDone<HeatmapResult>(activityId, { label });
     return { cached: false, result };
   } catch (err) {
     console.error(`FortyGuard heatmap activity_id=${activityId} error:`, err);

@@ -9,6 +9,7 @@ import { MAX_AOI_AREA_SQKM } from "@/lib/mapConfig";
 const SATELLITE_GRANULARITY = 100;
 
 export async function POST(request: NextRequest) {
+  const routeStartedAt = performance.now();
   let geometry: Polygon;
   try {
     const body = await request.json();
@@ -39,10 +40,18 @@ export async function POST(request: NextRequest) {
   // Follows the same FORTYGUARD_MODE as /v1/heatmap (see isCachedMode() in
   // lib/fortyguard.ts) — cached mode returns a fixture with zero real
   // requests, live mode spends 1 credit per AOI. No separate always-off gate.
+  console.log(`[/api/landcover] START — AOI ${areaSqKm.toFixed(3)} km², dispatching satellite + Overpass in parallel`);
+  const satelliteStartedAt = performance.now();
+  const overpassStartedAt = performance.now();
   const [fortyguardResult, overpassResult] = await Promise.allSettled([
-    runSatelliteWithDateFallback({ latitude: lat, longitude: lon, startDate, granularity: SATELLITE_GRANULARITY }),
-    fetchLandCoverFromOverpass(geometry),
+    runSatelliteWithDateFallback({ latitude: lat, longitude: lon, startDate, granularity: SATELLITE_GRANULARITY }).finally(() =>
+      console.log(`[/api/landcover] Footprint cross-check (satellite leg) settled — ${((performance.now() - satelliteStartedAt) / 1000).toFixed(1)}s`),
+    ),
+    fetchLandCoverFromOverpass(geometry).finally(() =>
+      console.log(`[/api/landcover] Footprint cross-check (Overpass leg) settled — ${((performance.now() - overpassStartedAt) / 1000).toFixed(1)}s`),
+    ),
   ]);
+  console.log(`[/api/landcover] COMPLETE — ${((performance.now() - routeStartedAt) / 1000).toFixed(1)}s total`);
 
   return NextResponse.json({
     areaSqKm,

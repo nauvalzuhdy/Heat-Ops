@@ -243,6 +243,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // Offsets that fail simply don't get an entry — never a fabricated value
   // (see ForecastPanel's sync effect, which only ever persists "ok" slots).
   captureFullForecast: async (geometry, daysBackHint) => {
+    const forecastStartedAt = performance.now();
+    console.log("[captureFullForecast] START — 5 slots requested in parallel");
     const requestId = ++latestForecastRequestId;
     set({ capturingForecast: true });
 
@@ -255,10 +257,17 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     // than writing over a newer capture.
     await Promise.all(
       FORECAST_HOUR_OFFSETS.map(async (hourOffset) => {
+        const slotStartedAt = performance.now();
         const slot = await fetchForecastSlot(geometry, hourOffset, daysBackHint);
+        console.log(
+          `[captureFullForecast] +${hourOffset}h settled (${slot.status}) — ${((performance.now() - slotStartedAt) / 1000).toFixed(1)}s`,
+        );
         if (requestId !== latestForecastRequestId) return;
         set((state) => ({ heatForecast: { ...state.heatForecast, [hourOffset]: slot } }));
       })
+    );
+    console.log(
+      `[captureFullForecast] all 5 slots settled — ${((performance.now() - forecastStartedAt) / 1000).toFixed(1)}s total`,
     );
 
     if (requestId !== latestForecastRequestId) {
@@ -270,6 +279,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     set({ capturingForecast: false });
   },
   analyzeAOI: async (geometry) => {
+    const analyzeStartedAt = performance.now();
+    console.log("[analyzeAOI] START");
     const requestId = ++latestRequestId;
     latestForecastRequestId++; // invalidate any in-flight forecast fetch from a prior analysis
     set({
@@ -377,12 +388,20 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       // hold data for this AOI seconds ago, instead of re-probing (and
       // re-paying for) the same empty dates five more times. Omitted when the
       // whole-day call failed — then each slot searches from scratch.
+      console.log(
+        `[analyzeAOI] main results COMPLETE — ${((performance.now() - analyzeStartedAt) / 1000).toFixed(1)}s ` +
+          `(forecast capture continues in the background, see [captureFullForecast] logs)`,
+      );
       get().captureFullForecast(
         geometry,
         heatmapRes.ok && "daysBack" in heatmapRes.body ? heatmapRes.body.daysBack : undefined
       );
     } catch (err) {
       if (requestId !== latestRequestId) return; // superseded — a stale failure shouldn't clobber a newer run either
+      console.log(
+        `[analyzeAOI] FAILED — ${((performance.now() - analyzeStartedAt) / 1000).toFixed(1)}s — ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
       set({ status: "error", error: err instanceof Error ? err.message : "Analysis failed" });
     }
   },
