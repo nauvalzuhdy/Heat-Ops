@@ -15,19 +15,28 @@
 //     so both cards said "Loading…" even when OpenStreetMap had answered in 8s
 //     and only FortyGuard's queue was outstanding. Naming which source is still
 //     outstanding is the single most useful thing this can say.
-//   - A real elapsed clock, read from the store's `startedAt`.
-//   - No estimate of remaining time: the dominant term is FortyGuard's own
-//     queue, which this app cannot observe. A countdown would be invented.
+//   - A real elapsed clock, read from the store's `startedAt`, ticking live
+//     while the run is in flight.
+//   - Once both requests settle, the live view is replaced by a short
+//     "Completed in Xm Ys · done H:MM AM/PM" caption — a fact about this run,
+//     not a running estimate — so the panel doesn't keep occupying space with
+//     a bar that has nothing left to report.
+//   - No estimate of remaining time while running: the dominant term is
+//     FortyGuard's own queue, which this app cannot observe. A countdown would
+//     be invented.
 //
-// Scope is deliberately the analyzing phase only. The five forecast slots are
-// fetched after the main results land, and AnalyzePanel already reports them
-// ("Still capturing the forecast window (N of 5 so far)") once status flips to
-// success. Counting them here too would put the bar at 2/7 exactly as this
-// component unmounts — a bar the user never sees finish — and duplicate a
-// counter that already exists. One phase, one reporter.
+// The methodology paragraph (why there's no percentage/ETA) is real
+// information but reads as a wall of text sitting under every single Analyze
+// run — it's now a collapsed <details> disclosure so it doesn't compete with
+// the run's own status line, while staying one click away rather than
+// disappearing.
+//
+// Scope is deliberately the analyzing phase only. The five forecast slots have
+// their own equivalent caption in ForecastPanel.tsx.
 import { useEffect, useState } from "react";
 import { useAnalysisStore } from "@/store/analysisStore";
 import type { AnalysisTaskState } from "@/store/analysisStore";
+import { formatCompletionCaption } from "@/lib/formatDuration";
 import StepProgressBar from "./StepProgressBar";
 
 function StepRow({ state, label, detail }: { state: AnalysisTaskState; label: string; detail: string }) {
@@ -57,18 +66,30 @@ function StepRow({ state, label, detail }: { state: AnalysisTaskState; label: st
 export default function AnalyzeProgress() {
   const progress = useAnalysisStore((s) => s.progress);
 
-  // Ticks only while a run is in flight. `startedAt` is set once by
-  // analyzeAOI(), so this reads a real wall-clock delta rather than counting
-  // its own renders.
+  // Ticks only while a run is genuinely in flight (started, not yet
+  // completed). `startedAt`/`completedAt` are set once by analyzeAOI(), so
+  // this reads a real wall-clock delta rather than counting its own renders.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (progress.startedAt == null) return;
+    if (progress.startedAt == null || progress.completedAt != null) return;
     setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [progress.startedAt]);
+  }, [progress.startedAt, progress.completedAt]);
 
   if (progress.startedAt == null) return null;
+
+  // Done: a short fact about this run, not a live view — nothing left to tick.
+  if (progress.completedAt != null) {
+    return (
+      <div className="flex items-center gap-1.5 text-[11px] text-fg-muted">
+        <svg viewBox="0 0 12 12" className="h-3 w-3 shrink-0 text-severity-nominal" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path d="M2.5 6.5 5 9l4.5-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span>{formatCompletionCaption(progress.startedAt, progress.completedAt)}</span>
+      </div>
+    );
+  }
 
   const elapsedSec = Math.max(0, Math.floor((now - progress.startedAt) / 1000));
   const doneSteps = (progress.heatmap !== "pending" ? 1 : 0) + (progress.landcover !== "pending" ? 1 : 0);
@@ -103,13 +124,18 @@ export default function AnalyzeProgress() {
         />
       </ul>
 
-      <p className="mt-2 text-[10px] leading-relaxed text-fg-muted">
-        The solid bar only advances when a request actually returns; the moving band means work is still in flight,
-        not a percentage. No time estimate is shown because neither remaining wait is observable from here:
-        FortyGuard is polled, not streamed, and OpenStreetMap reports nothing until a mirror answers — on a large
-        AOI it retries up to four times across three mirrors, which is the usual reason this step outlasts the
-        heatmap. Forecast slots are fetched after this and reported separately. This run consumes API credits.
-      </p>
+      {/* Collapsed by default — the methodology is real and stays reachable,
+          but it shouldn't compete with the two lines above on every run. */}
+      <details className="mt-2 text-fg-muted">
+        <summary className="cursor-pointer select-none text-[10px] font-medium">Why isn&apos;t there a percentage?</summary>
+        <p className="mt-1.5 text-[10px] leading-relaxed">
+          The solid bar only advances when a request actually returns; the moving band means work is still in flight,
+          not a percentage. No time estimate is shown because neither remaining wait is observable from here:
+          FortyGuard is polled, not streamed, and OpenStreetMap reports nothing until a mirror answers — on a large
+          AOI it retries up to four times across three mirrors, which is the usual reason this step outlasts the
+          heatmap. Forecast slots are fetched after this and reported separately. This run consumes API credits.
+        </p>
+      </details>
     </div>
   );
 }

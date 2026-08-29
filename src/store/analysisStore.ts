@@ -62,13 +62,18 @@ export type AnalysisTaskState = "pending" | "done" | "failed";
 export type AnalysisProgress = {
   /** epoch ms when the current run started, or null when idle. Drives a real elapsed timer. */
   startedAt: number | null;
+  /** epoch ms when both requests below settled, or null while still running/idle. Drives the "Completed in Xm Ys · done H:MM" caption. */
+  completedAt: number | null;
   /** FortyGuard /v1/heatmap, whole-day. */
   heatmap: AnalysisTaskState;
   /** /api/landcover — Overpass and FortyGuard /v1/satellite, in parallel server-side. */
   landcover: AnalysisTaskState;
 };
 
-const IDLE_PROGRESS: AnalysisProgress = { startedAt: null, heatmap: "pending", landcover: "pending" };
+const IDLE_PROGRESS: AnalysisProgress = { startedAt: null, completedAt: null, heatmap: "pending", landcover: "pending" };
+
+export type PhaseProgress = { startedAt: number | null; completedAt: number | null };
+const IDLE_PHASE: PhaseProgress = { startedAt: null, completedAt: null };
 
 type AnalysisState = {
   status: "idle" | "analyzing" | "success" | "error";
@@ -81,6 +86,8 @@ type AnalysisState = {
   setHeatmapImageUrl: (url: string | null) => void;
   /** Read-only from the UI's point of view — only analyzeAOI()/reset() write it. */
   progress: AnalysisProgress;
+  /** Same idea as `progress`, scoped to captureFullForecast's +0..+12h window. */
+  forecastProgress: PhaseProgress;
   analyzeAOI: (geometry: Polygon) => Promise<void>;
   reset: () => void;
   // §4.4 forecast slots, keyed by hour offset (0/3/6/9/12). `null` selection
@@ -219,6 +226,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   loadingHourOffset: null,
   capturingForecast: false,
   progress: IDLE_PROGRESS,
+  forecastProgress: IDLE_PHASE,
   selectForecastSlot: async (geometry, hourOffset) => {
     set({ selectedHourOffset: hourOffset });
 
@@ -246,7 +254,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     const forecastStartedAt = performance.now();
     console.log("[captureFullForecast] START — 5 slots requested in parallel");
     const requestId = ++latestForecastRequestId;
-    set({ capturingForecast: true });
+    set({ capturingForecast: true, forecastProgress: { startedAt: Date.now(), completedAt: null } });
 
     // Each slot is committed to the store the moment IT resolves, not batched
     // until all five have. The five requests already ran in parallel, but a
@@ -269,6 +277,9 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     console.log(
       `[captureFullForecast] all 5 slots settled — ${((performance.now() - forecastStartedAt) / 1000).toFixed(1)}s total`,
     );
+    if (requestId === latestForecastRequestId) {
+      set((state) => ({ forecastProgress: { ...state.forecastProgress, completedAt: Date.now() } }));
+    }
 
     if (requestId !== latestForecastRequestId) {
       // Superseded by a redraw or a fresh analysis — that newer call (or
@@ -292,7 +303,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       selectedHourOffset: null,
       loadingHourOffset: null,
       capturingForecast: false,
-      progress: { startedAt: Date.now(), heatmap: "pending", landcover: "pending" },
+      progress: { startedAt: Date.now(), completedAt: null, heatmap: "pending", landcover: "pending" },
+      forecastProgress: IDLE_PHASE,
     });
     try {
       // Records one task's real completion the moment it lands. Guarded by the
@@ -392,6 +404,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         `[analyzeAOI] main results COMPLETE — ${((performance.now() - analyzeStartedAt) / 1000).toFixed(1)}s ` +
           `(forecast capture continues in the background, see [captureFullForecast] logs)`,
       );
+      set((state) => ({ progress: { ...state.progress, completedAt: Date.now() } }));
       get().captureFullForecast(
         geometry,
         heatmapRes.ok && "daysBack" in heatmapRes.body ? heatmapRes.body.daysBack : undefined
@@ -422,6 +435,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       selectedHourOffset: null,
       loadingHourOffset: null,
       progress: IDLE_PROGRESS,
+      forecastProgress: IDLE_PHASE,
     });
   },
 }));

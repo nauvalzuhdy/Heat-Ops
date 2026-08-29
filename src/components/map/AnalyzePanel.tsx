@@ -233,9 +233,12 @@ export default function AnalyzePanel() {
           )}
 
           {/* Real per-request progress, replacing a static sentence that gave no
-              sense of how far along a ~45s run was. See AnalyzeProgress.tsx for
-              why this counts requests rather than tiles. */}
-          {status === "analyzing" && <AnalyzeProgress />}
+              sense of how far along a ~45s run was. Kept mounted through
+              "success" too (not just "analyzing") so it can swap from the live
+              view to a short "Completed in Xm Ys · done H:MM" caption instead
+              of vanishing the moment the run finishes — see AnalyzeProgress.tsx
+              for why this counts requests rather than tiles. */}
+          {(status === "analyzing" || status === "success") && <AnalyzeProgress />}
 
           {status === "error" && (
             <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">

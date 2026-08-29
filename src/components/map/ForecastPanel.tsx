@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { formatCompletionCaption } from "@/lib/formatDuration";
 import type { Polygon } from "geojson";
 import { FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
 import { formatForecastTimeLabel, formatForecastDateLabel } from "@/lib/wbgt";
@@ -95,6 +96,21 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
   // Settled, not successful: a slot FortyGuard returned no data for is a
   // finished request, and leaving it out would stall the bar below at 4/5.
   const settledSlotCount = FORECAST_HOUR_OFFSETS.filter((h) => heatForecast[h] != null).length;
+
+  const forecastProgress = useAnalysisStore((s) => s.forecastProgress);
+  // Same live-elapsed pattern as AnalyzeProgress.tsx: ticks only while this
+  // phase is genuinely running, stops the moment it completes.
+  const [forecastNow, setForecastNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (forecastProgress.startedAt == null || forecastProgress.completedAt != null) return;
+    setForecastNow(Date.now());
+    const id = setInterval(() => setForecastNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [forecastProgress.startedAt, forecastProgress.completedAt]);
+  const forecastElapsedSec =
+    forecastProgress.startedAt != null
+      ? Math.max(0, Math.floor((forecastNow - forecastProgress.startedAt) / 1000))
+      : 0;
   const captureAttempted = FORECAST_HOUR_OFFSETS.some((h) => heatForecast[h]);
   const allSlotsFailed = !capturingForecast && captureAttempted && okOffsets.length === 0;
 
@@ -218,24 +234,44 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
           are for previewing which slot's heatmap renders below, not for
           triggering the fetch itself anymore. A slot FortyGuard genuinely
           never returned data for stays "—"/"err", never a guessed value. */}
-      <p className="text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-600">
-        {capturingForecast
-          ? `Capturing the full +12h window from FortyGuard — ${settledSlotCount} of ${FORECAST_HOUR_OFFSETS.length} slots returned…`
-          : "Captured automatically for this AOI. Click a slot to preview its heatmap."}
-      </p>
-
-      {/* Unlike the main analyze phase, this one is genuinely determinate: each
-          of the five offsets is its own request and settles independently, so
-          the bar really does fill in steps as slots come back. A slot that
-          FortyGuard had no data for counts as settled too — it is a finished
-          request with an honest empty answer, not an outstanding one. */}
-      {capturingForecast && (
-        <StepProgressBar
-          done={settledSlotCount}
-          total={FORECAST_HOUR_OFFSETS.length}
-          busy
-          label="Forecast capture progress"
-        />
+      {/* Same three-state shape as AnalyzeProgress.tsx: running (ticking
+          elapsed + determinate bar), done (a short fact, not a live view), or
+          neither yet. Unlike the main analyze phase, this one is genuinely
+          determinate — each of the five offsets is its own request and
+          settles independently, so the bar really does fill in steps as slots
+          come back. A slot FortyGuard had no data for counts as settled too — it is a finished request with an honest empty answer, not an
+          outstanding one. */}
+      {capturingForecast ? (
+        <>
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-600">
+              {`Capturing the full +12h window from FortyGuard — ${settledSlotCount} of ${FORECAST_HOUR_OFFSETS.length} slots returned…`}
+            </p>
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-neutral-400 dark:text-neutral-600">
+              {forecastElapsedSec}s
+            </span>
+          </div>
+          <StepProgressBar
+            done={settledSlotCount}
+            total={FORECAST_HOUR_OFFSETS.length}
+            busy
+            label="Forecast capture progress"
+          />
+        </>
+      ) : forecastProgress.startedAt != null && forecastProgress.completedAt != null ? (
+        <div className="flex items-center gap-1.5 text-[11px] text-neutral-400 dark:text-neutral-600">
+          <svg viewBox="0 0 12 12" className="h-3 w-3 shrink-0 text-severity-nominal" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path d="M2.5 6.5 5 9l4.5-6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>
+            {formatCompletionCaption(forecastProgress.startedAt, forecastProgress.completedAt)} · Click a slot to preview its
+            heatmap.
+          </span>
+        </div>
+      ) : (
+        <p className="text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-600">
+          Captured automatically for this AOI. Click a slot to preview its heatmap.
+        </p>
       )}
 
       <div className="grid grid-cols-5 gap-1.5">
