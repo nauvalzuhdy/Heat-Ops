@@ -8,6 +8,7 @@
 import { useAnalystTabs } from "./useAnalystTabs";
 import IconToolbar from "./IconToolbar";
 import ContentArea from "./ContentArea";
+import RefreshDataButton from "./RefreshDataButton";
 import type { SiteRow } from "./types";
 import type { ForecastTimelineSlot } from "@/lib/wbgt";
 
@@ -16,12 +17,16 @@ export default function AnalystTabsShell({
   bbox,
   createdAtLabel,
   createdAtTimeLabel,
+  lastUpdatedLabel,
+  lastUpdatedTimeLabel,
   forecastTimeline,
 }: {
   row: SiteRow;
   bbox: [number, number, number, number] | null;
   createdAtLabel: string;
   createdAtTimeLabel: string;
+  lastUpdatedLabel: string;
+  lastUpdatedTimeLabel: string;
   forecastTimeline: ForecastTimelineSlot[];
 }) {
   const { activeTab, setActiveTab, tabs } = useAnalystTabs();
@@ -31,9 +36,20 @@ export default function AnalystTabsShell({
     // it — this is what lets a "fill" tab (Hotspot Detection) size its map
     // to precisely the available space instead of a fixed px height.
     <div className="flex h-full flex-col gap-3">
-      <h2 className="shrink-0 text-base font-semibold text-neutral-900 dark:text-white">
-        {row.name ?? `Site ${row.id.slice(0, 8)}`}
-      </h2>
+      {/* Lives here, not inside one tab, so it stays visible and site-wide
+          regardless of which tab is active — see RefreshDataButton.tsx for
+          why one refresh here updates every tab. */}
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold text-neutral-900 dark:text-white">
+            {row.name ?? `Site ${row.id.slice(0, 8)}`}
+          </h2>
+          <p className="mt-0.5 text-[11px] text-fg-muted">
+            Last updated: {lastUpdatedLabel} · {lastUpdatedTimeLabel}
+          </p>
+        </div>
+        <RefreshDataButton siteId={row.id} />
+      </div>
 
       {/* min-h-0 + overflow-y-auto: each tab's content gets exactly this
           much height. A tab whose content naturally fits (or, like Hotspot,

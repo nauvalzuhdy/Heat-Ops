@@ -36,4 +36,13 @@ export type SiteRow = {
    * disagree with the report for any site whose scenario was edited.
    */
   roi_inputs: ROIInputs | null;
+  /**
+   * Set once by the Refresh Latest Data feature (app/api/sites/[id]/refresh),
+   * null for a site never refreshed since creation — the UI falls back to
+   * `created_at` in that case, never showing a blank "Last updated". Requires
+   * the `updated_at` migration documented in README — selecting it against a
+   * database that hasn't run that migration yet fails the query, so this field
+   * only exists in rows/environments where it has been applied.
+   */
+  updated_at: string | null;
 };

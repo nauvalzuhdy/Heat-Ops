@@ -20,20 +20,35 @@ import type { SiteRow } from "@/components/analyst/types";
 // eviction. Every request here must see the current table state.
 export const dynamic = "force-dynamic";
 
+// roi_inputs is read here (not just by RoiPanel's own fetch) so the
+// Overview tab's headline outcome banner can state the operator's saved
+// scenario — the same one lib/reportData.ts feeds the PDF report.
+const SITE_COLUMNS =
+  "id, name, created_at, aoi_geometry, site_area_m2, landcover, landcover_spotcheck, heat_tiles, heat_stats, heat_forecast, heat_photo_url, satellite_photo_url, attribution, roi_inputs";
+
 async function fetchSite(
   siteId: string,
 ): Promise<{ row: SiteRow | null; error: string | null }> {
   const supabase = getSupabaseServiceClient();
+
+  // `updated_at` (Refresh Latest Data's "Last updated" timestamp) requires
+  // the migration documented in README's Database setup section. Selecting a
+  // column Postgrest doesn't know about fails the WHOLE query (42703), not
+  // just that one field — so this tries with it first and falls back to the
+  // pre-existing column list on that SPECIFIC error, rather than breaking
+  // every saved site's page for anyone who hasn't run the migration yet.
   const { data, error } = await supabase
     .from("sites")
-    .select(
-      // roi_inputs is read here (not just by RoiPanel's own fetch) so the
-      // Overview tab's headline outcome banner can state the operator's saved
-      // scenario — the same one lib/reportData.ts feeds the PDF report.
-      "id, name, created_at, aoi_geometry, site_area_m2, landcover, landcover_spotcheck, heat_tiles, heat_stats, heat_forecast, heat_photo_url, satellite_photo_url, attribution, roi_inputs",
-    )
+    .select(`${SITE_COLUMNS}, updated_at`)
     .eq("id", siteId)
     .maybeSingle();
+
+  if (error && /column .*updated_at.* does not exist/i.test(error.message)) {
+    const fallback = await supabase.from("sites").select(SITE_COLUMNS).eq("id", siteId).maybeSingle();
+    if (fallback.error) return { row: null, error: fallback.error.message };
+    const row = fallback.data ? ({ ...fallback.data, updated_at: null } as SiteRow) : null;
+    return { row, error: null };
+  }
 
   if (error) return { row: null, error: error.message };
   return { row: (data as SiteRow) ?? null, error: null };
@@ -162,6 +177,15 @@ async function SiteData({ siteId }: { siteId: string }) {
   const createdAtLabel = new Date(row.created_at).toLocaleDateString();
   const createdAtTimeLabel = new Date(row.created_at).toLocaleTimeString();
 
+  // "Last updated" for the Refresh Latest Data feature — same server-side,
+  // once-formatted approach as createdAt above, for the same hydration
+  // reason. Falls back to the creation timestamp for a site never refreshed
+  // (updated_at null, including on a database that hasn't run the migration
+  // yet — see fetchSite() above), so this never renders a blank label.
+  const lastUpdatedIso = row.updated_at ?? row.created_at;
+  const lastUpdatedLabel = new Date(lastUpdatedIso).toLocaleDateString();
+  const lastUpdatedTimeLabel = new Date(lastUpdatedIso).toLocaleTimeString();
+
   // Same reasoning, applied to Shift Schedule's per-slot timestamps (Sub-task
   // 3 revision): format here, once, server-side — never in ShiftSchedulePanel
   // itself. buildForecastTimeline() (lib/wbgt.ts) also fills in the +0/+3/+6/
@@ -179,6 +203,8 @@ async function SiteData({ siteId }: { siteId: string }) {
       bbox={bbox as [number, number, number, number] | null}
       createdAtLabel={createdAtLabel}
       createdAtTimeLabel={createdAtTimeLabel}
+      lastUpdatedLabel={lastUpdatedLabel}
+      lastUpdatedTimeLabel={lastUpdatedTimeLabel}
       forecastTimeline={forecastTimeline}
     />
   );

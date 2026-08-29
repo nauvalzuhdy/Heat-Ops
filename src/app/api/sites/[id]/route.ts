@@ -5,6 +5,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServiceClient } from "@/lib/supabaseServer";
 import type { HeatForecastEntry } from "@/lib/siteRecord";
+// Route Handlers are cached by default unless marked dynamic. This one
+// reads live Supabase data with no cache-busting dynamic API of its own
+// (no cookies()/headers()/searchParams), so without this it could silently
+// serve a stale response after a refresh — the exact bug class the
+// site-wide refresh feature exists to prevent. Matches app/analyst/page.tsx
+// and app/copilot/page.tsx, which already do this for the same reason.
+export const dynamic = "force-dynamic";
+
 
 // Read-only, Supabase-only (no FortyGuard call) — lets Map View's
 // ForecastPanel show this site's most recent STORED forecast entry as

@@ -7,6 +7,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServiceClient } from "@/lib/supabaseServer";
 import type { ROIInputs } from "@/lib/roiSimulator";
+// Route Handlers are cached by default unless marked dynamic. This one
+// reads live Supabase data with no cache-busting dynamic API of its own
+// (no cookies()/headers()/searchParams), so without this it could silently
+// serve a stale response after a refresh — the exact bug class the
+// site-wide refresh feature exists to prevent. Matches app/analyst/page.tsx
+// and app/copilot/page.tsx, which already do this for the same reason.
+export const dynamic = "force-dynamic";
+
 
 export async function GET(_request: NextRequest, { params }: { params: { id: string } }) {
   const supabase = getSupabaseServiceClient();

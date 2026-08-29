@@ -8,6 +8,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { buildReportData, generateReportNarrative } from "@/lib/reportData";
 import SiteReportDocument from "@/lib/pdf/SiteReportDocument";
+// Route Handlers are cached by default unless marked dynamic. This one
+// reads live Supabase data with no cache-busting dynamic API of its own
+// (no cookies()/headers()/searchParams), so without this it could silently
+// serve a stale response after a refresh — the exact bug class the
+// site-wide refresh feature exists to prevent. Matches app/analyst/page.tsx
+// and app/copilot/page.tsx, which already do this for the same reason.
+export const dynamic = "force-dynamic";
+
 
 // Fetches the site's already-saved satellite photo from Supabase Storage —
 // the same asset Operational Analyst's Hotspot Detection columns render via

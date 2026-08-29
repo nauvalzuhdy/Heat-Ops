@@ -206,12 +206,19 @@ One Postgres table plus one Storage bucket.
 | `attribution` | jsonb | `real` / `synthetic` / `unavailable` per data source |
 | `satellite_photo_url`, `segmentation_photo_url`, `heat_photo_url` | text | Public Storage URLs |
 | `roi_inputs` | jsonb | Saved ROI simulator scenario (nullable) |
+| `updated_at` | timestamptz | Set by "Refresh Latest Data" (Operational Analyst); null until a site's first refresh |
 
-If ROI inputs aren't persisting, this column is the usual reason:
+If ROI inputs aren't persisting, or "Last updated" always matches the creation date even after clicking Refresh, one of these columns is the usual reason:
 
 ```sql
 alter table sites add column if not exists roi_inputs jsonb;
+alter table sites add column if not exists updated_at timestamptz;
 ```
+
+Both routes that use these columns degrade gracefully without the migration
+(ROI simply doesn't persist; Refresh updates the row's data but can't stamp a
+timestamp) rather than failing outright — but the migration is what makes
+either feature actually work.
 
 ---
 
@@ -456,6 +463,14 @@ Honest limitations, so you know what you’re looking at.
 - **The AI Copilot needs a DeepSeek key.** Without one the dashboard still works fully; the
   chat and the PDF’s narrative section degrade to an explicit “unavailable” message rather
   than failing.
+- **Refresh Latest Data updates numbers, not saved snapshot images.** It re-runs the
+  heatmap/land-cover/forecast calls against the site’s existing AOI and updates every tab
+  from one canonical row, but the three saved photos (satellite, heatmap, segmentation)
+  are rendered client-side during Map View’s own Analyze flow — a server route has no
+  canvas to re-render them from. They only update by re-analyzing from Map View.
+- **Refresh has no server-side duplicate-request lock** — only a disabled button while one
+  run is in flight. Fine for this app’s actual single-operator usage; a genuine concurrent-
+  refresh guard would need a lock column or similar, not built here.
 
 ---
 
