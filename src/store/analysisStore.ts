@@ -15,11 +15,25 @@ export type EndpointResult<T> =
   | { status: "ok"; result: T; cached?: boolean; dateUsed?: string; isFallbackDate?: boolean }
   | { status: "error"; message: string };
 
+// Satellite tree-canopy segmentation is fetched as its own, separate,
+// non-blocking request (2026-08-29 performance investigation — see
+// api/satellite/segmentation/route.ts) fired alongside the main heatmap +
+// landcover call rather than gating it. `data.satellite` therefore starts
+// "pending" the moment `status` flips to "success" and resolves to ok/error
+// independently afterward — unlike heatmap/overpass, which are only ever
+// present once already settled. Nothing outside analysisStore ever
+// constructs a "pending" value; AnalyzePanel's save-prompt effect waits for
+// it to leave "pending" before opening, so app/api/sites/route.ts's
+// buildSiteRecord() still only ever receives ok/error, exactly as before —
+// zero changes needed to persistence, Operational Analyst, or the canopy
+// recommendation/ROI pipeline that reads it.
+export type SatelliteResult = EndpointResult<SatelliteSegmentationResult> | { status: "pending" };
+
 type AnalysisData = {
   areaSqKm: number;
   centroid: { lat: number; lon: number };
   heatmap: EndpointResult<HeatmapResult>;
-  satellite: EndpointResult<SatelliteSegmentationResult>;
+  satellite: SatelliteResult;
   overpass: EndpointResult<OverpassLandCover>;
 };
 
@@ -62,15 +76,37 @@ export type AnalysisTaskState = "pending" | "done" | "failed";
 export type AnalysisProgress = {
   /** epoch ms when the current run started, or null when idle. Drives a real elapsed timer. */
   startedAt: number | null;
-  /** epoch ms when both requests below settled, or null while still running/idle. Drives the "Completed in Xm Ys · done H:MM" caption. */
+  /**
+   * epoch ms once heatmap + landcover (the two requests Map View's main
+   * result waits for) have settled, or null while still running/idle.
+   * Drives the "Completed in Xm Ys · done H:MM" caption. Deliberately NOT
+   * gated on satellite — see `satellite` below and the 2026-08-29
+   * performance investigation: canopy is independent enrichment, tracked in
+   * its own field, and must never delay this timestamp or the main result
+   * it represents.
+   */
   completedAt: number | null;
   /** FortyGuard /v1/heatmap, whole-day. */
   heatmap: AnalysisTaskState;
-  /** /api/landcover — Overpass and FortyGuard /v1/satellite, in parallel server-side. */
+  /** /api/landcover — Overpass only (see api/landcover/route.ts's 2026-08-29 split). */
   landcover: AnalysisTaskState;
+  /**
+   * FortyGuard /v1/satellite tree-canopy segmentation, fetched as its own
+   * request (api/satellite/segmentation/route.ts) fired alongside, never
+   * gating, the two above. Surfaced separately so the UI can show real,
+   * non-fabricated status for it ("Tree canopy: analyzing…" / "done" /
+   * "unavailable this run") without implying it blocks anything.
+   */
+  satellite: AnalysisTaskState;
 };
 
-const IDLE_PROGRESS: AnalysisProgress = { startedAt: null, completedAt: null, heatmap: "pending", landcover: "pending" };
+const IDLE_PROGRESS: AnalysisProgress = {
+  startedAt: null,
+  completedAt: null,
+  heatmap: "pending",
+  landcover: "pending",
+  satellite: "pending",
+};
 
 export type PhaseProgress = { startedAt: number | null; completedAt: number | null };
 const IDLE_PHASE: PhaseProgress = { startedAt: null, completedAt: null };
@@ -120,10 +156,11 @@ type LandcoverRouteBody =
   | {
       areaSqKm: number;
       centroid: { lat: number; lon: number };
-      fortyguard: EndpointResult<SatelliteSegmentationResult>;
       overpass: EndpointResult<OverpassLandCover>;
     }
   | { error: string };
+
+type SatelliteRouteBody = { fortyguard: EndpointResult<SatelliteSegmentationResult> } | { error: string };
 
 async function postJSON<TBody>(
   url: string,
@@ -303,21 +340,45 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       selectedHourOffset: null,
       loadingHourOffset: null,
       capturingForecast: false,
-      progress: { startedAt: Date.now(), completedAt: null, heatmap: "pending", landcover: "pending" },
+      progress: { startedAt: Date.now(), completedAt: null, heatmap: "pending", landcover: "pending", satellite: "pending" },
       forecastProgress: IDLE_PHASE,
     });
     try {
       // Records one task's real completion the moment it lands. Guarded by the
       // same requestId ticket the result handling below uses, so a superseded
       // run can never write progress over a newer one.
-      const markTask = (task: "heatmap" | "landcover", ok: boolean) => {
+      const markTask = (task: "heatmap" | "landcover" | "satellite", ok: boolean) => {
         if (requestId !== latestRequestId) return;
         set((state) => ({ progress: { ...state.progress, [task]: ok ? "done" : "failed" } }));
       };
 
-      // /v1/heatmap and /v1/satellite are submitted in parallel; /api/landcover
-      // itself already fetches /v1/satellite and Overpass in parallel server-side
-      // (see app/api/landcover/route.ts), so all three run concurrently.
+      // Tree-canopy segmentation (2026-08-29 performance investigation) is
+      // fired here, immediately, alongside heatmap/landcover — but its
+      // promise is deliberately NOT part of the Promise.all below. It is
+      // genuinely independent enrichment (a centroid land-cover sample,
+      // unrelated to the AOI-wide temperature tiles or the Overpass
+      // footprint), and four to five live probes tonight found FortyGuard's
+      // /v1/satellite taking 174-181s before answering "Failed" during a
+      // service-side degradation — bundling it into the main gate meant
+      // Map View's heat display could not appear until that whole wait was
+      // over, every single time, regardless of how fast heatmap/landcover
+      // themselves were. It resolves into `data.satellite` whenever it
+      // lands, via the `.then()` below, without blocking anything above it.
+      void postJSON<SatelliteRouteBody>("/api/satellite/segmentation", geometry).then((res) => {
+        markTask("satellite", res.ok);
+        if (requestId !== latestRequestId) return; // superseded — a stale result must not land on a newer run's data
+        const satellite: SatelliteResult =
+          res.ok && "fortyguard" in res.body
+            ? res.body.fortyguard
+            : { status: "error", message: ("error" in res.body && res.body.error) || "Tree-canopy segmentation failed." };
+        // A no-op if analyzeAOI ultimately failed and never set `data` at
+        // all (state.data stays null) — nothing to attach this to in that
+        // case, matching how forecast slots already behave on a failed run.
+        set((state) => (state.data ? { data: { ...state.data, satellite } } : state));
+      });
+
+      // /v1/heatmap and Overpass are submitted in parallel — these two are
+      // what Map View's main result waits for.
       //
       // The .then() hooks only report progress — they return the response
       // untouched, so Promise.all and every consumer below behave exactly as
@@ -365,13 +426,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
                   status: "error",
                   message: ("error" in heatmapRes.body && heatmapRes.body.error) || "Heatmap generation failed",
                 },
-          satellite:
-            landcoverRes.ok && "fortyguard" in landcoverRes.body
-              ? landcoverRes.body.fortyguard
-              : {
-                  status: "error",
-                  message: ("error" in landcoverRes.body && landcoverRes.body.error) || "Land-cover analysis failed",
-                },
+          // Fired separately above and not part of this Promise.all — this
+          // is its initial state the instant Map View shows the main
+          // result; the satellitePromise .then() updates it in place once
+          // /v1/satellite actually settles, independent of everything here.
+          satellite: { status: "pending" } satisfies SatelliteResult,
           overpass:
             landcoverRes.ok && "overpass" in landcoverRes.body
               ? landcoverRes.body.overpass

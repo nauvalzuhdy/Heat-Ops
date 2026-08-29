@@ -124,6 +124,19 @@ export default function AnalyzePanel() {
     // async basemap capture) rather than prompting before it — unless the
     // heatmap call itself failed, in which case there's nothing to wait for.
     if (data.heatmap.status === "ok" && !heatmapImageUrl) return;
+    // Tree-canopy segmentation (2026-08-29 performance investigation) is
+    // fetched separately and never blocks Map View's own display — see
+    // analysisStore.ts's analyzeAOI(). It DOES need to have settled (ok or
+    // error, never "pending") before this prompt opens, though: saveSite()
+    // below sends `data.satellite` straight to buildSiteRecord() via
+    // /api/sites, which only ever understands ok/error — never "pending".
+    // Waiting here, rather than teaching that whole pipeline a third state,
+    // keeps persistence, Operational Analyst, and the canopy recommendation/
+    // ROI pipeline completely untouched. Bounded: satellite gives up after
+    // its own ~45s poll budget (lib/fortyguard.ts), so this adds at most
+    // that much extra wait, in parallel with (not stacked after) the heat
+    // display the user is already looking at.
+    if (data.satellite.status === "pending") return;
 
     setNamePrompted(true);
     setNameModalOpen(true);
@@ -350,13 +363,23 @@ export default function AnalyzePanel() {
                 tree-canopy data at all, only discovered later in Operational
                 Analyst as "segmentation isn't available for this site yet".
               */}
+              {/* "pending" is real, observable pipeline state (the request is
+                  genuinely in flight — see analysisStore.ts), not a fabricated
+                  progress percentage. It only shows while the name-prompt
+                  below is deliberately held back waiting for this same
+                  status to settle. */}
+              {status === "success" && data?.satellite.status === "pending" && (
+                <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface-2 px-3 py-2.5 text-[11px] text-fg-muted">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-fg-muted" />
+                  Analyzing tree canopy in the background — heat analysis above is already final.
+                </div>
+              )}
               {status === "success" && data?.satellite.status === "error" && (
                 <div className="rounded-lg border border-status-cached/40 bg-status-cached-bg px-3 py-2.5 text-[11px] leading-relaxed text-status-cached">
                   <span className="font-medium">Tree-canopy spot-check unavailable for this run.</span>{" "}
-                  FortyGuard&apos;s satellite segmentation did not return for this AOI, so a site saved now will
-                  have no tree-canopy percentage — and Operational Analyst will show no canopy
-                  recommendation or its ROI. The heat analysis above is unaffected. Re-running Analyze later
-                  usually resolves it.
+                  <span className="italic">{data.satellite.message}</span> A site saved now will have no
+                  tree-canopy percentage — and Operational Analyst will show no canopy recommendation or its
+                  ROI. The heat analysis above is unaffected.
                 </div>
               )}
 

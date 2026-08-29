@@ -70,10 +70,17 @@ type LandcoverRouteBody =
   | {
       areaSqKm: number;
       centroid: { lat: number; lon: number };
+      overpass: { status: "ok"; result: OverpassLandCover } | { status: "error"; message: string };
+    }
+  | { error: string };
+
+// Split from LandcoverRouteBody on 2026-08-29 (see api/satellite/segmentation
+// /route.ts) — /api/landcover no longer returns a `fortyguard` leg at all.
+type SatelliteRouteBody =
+  | {
       fortyguard:
         | { status: "ok"; cached: boolean; result: SatelliteSegmentationResult; dateUsed: string; isFallbackDate: boolean }
         | { status: "error"; message: string };
-      overpass: { status: "ok"; result: OverpassLandCover } | { status: "error"; message: string };
     }
   | { error: string };
 
@@ -143,17 +150,27 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
   const origin = request.nextUrl.origin;
 
-  // Whole-day heatmap and landcover (satellite + Overpass) — same two calls,
-  // same parallelism, analyzeAOI() already uses for a fresh analysis.
+  // Whole-day heatmap, landcover (Overpass), and satellite (tree canopy) —
+  // three independent calls, all fired in parallel. Satellite is its own
+  // request as of 2026-08-29 (api/satellite/segmentation/route.ts) — it used
+  // to be bundled into /api/landcover's response, which meant this refresh
+  // waited on satellite's own (bounded, but still up to ~45s) timeout before
+  // it could report the OTHER two legs at all. Splitting it out here mirrors
+  // the exact same fix analyzeAOI() already got for a fresh analysis.
   const heatmapStartedAt = performance.now();
   const landcoverStartedAt = performance.now();
-  const [heatmapRes, landcoverRes] = await Promise.all([
+  const satelliteStartedAt = performance.now();
+  const [heatmapRes, landcoverRes, satelliteRes] = await Promise.all([
     postJSON<HeatmapRouteBody>(origin, "/api/heatmap", { geometry }).then((r) => {
       console.log(`[/api/sites/${siteId}/refresh] Surface Heatmap leg settled — ${((performance.now() - heatmapStartedAt) / 1000).toFixed(1)}s`);
       return r;
     }),
     postJSON<LandcoverRouteBody>(origin, "/api/landcover", { geometry }).then((r) => {
-      console.log(`[/api/sites/${siteId}/refresh] Footprint+Tree-canopy leg settled — ${((performance.now() - landcoverStartedAt) / 1000).toFixed(1)}s`);
+      console.log(`[/api/sites/${siteId}/refresh] Footprint leg settled — ${((performance.now() - landcoverStartedAt) / 1000).toFixed(1)}s`);
+      return r;
+    }),
+    postJSON<SatelliteRouteBody>(origin, "/api/satellite/segmentation", { geometry }).then((r) => {
+      console.log(`[/api/sites/${siteId}/refresh] Tree-canopy leg settled — ${((performance.now() - satelliteStartedAt) / 1000).toFixed(1)}s`);
       return r;
     }),
   ]);
@@ -163,8 +180,9 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // through Extract), and this reads more plainly besides.
   const heatmapBody = heatmapRes.ok && "result" in heatmapRes.body ? heatmapRes.body : null;
   const landcoverBody = landcoverRes.ok && "overpass" in landcoverRes.body ? landcoverRes.body : null;
+  const satelliteBody = satelliteRes.ok && "fortyguard" in satelliteRes.body ? satelliteRes.body : null;
   const overpassLeg = landcoverBody?.overpass.status === "ok" ? landcoverBody.overpass : null;
-  const satelliteLeg = landcoverBody?.fortyguard.status === "ok" ? landcoverBody.fortyguard : null;
+  const satelliteLeg = satelliteBody?.fortyguard.status === "ok" ? satelliteBody.fortyguard : null;
 
   const heatmapOk = heatmapBody != null;
   const overpassOk = overpassLeg != null;
