@@ -345,7 +345,7 @@ export default function AnalyzePanel() {
               onClick={() => geometry && analyzeAOI(geometry)}
               className="rounded-lg bg-neutral-900 px-4 py-2.5 text-xs font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
             >
-              {status === "analyzing" ? "Analyzing land cover…" : "Analyze land cover"}
+              {status === "analyzing" ? "Analyzing this area…" : "Analyze this area"}
             </button>
           )}
 

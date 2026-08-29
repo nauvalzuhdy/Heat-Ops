@@ -32,6 +32,8 @@ HeatOps is three pages, in the order you'd use them.
 
 ### 1. Map View (`/map`)
 
+![Map View — 3D building massing over a drawn AOI, with the footprint cross-check panel](public/screen/mapview.png)
+
 Data acquisition.
 
 - Search a location (Nominatim geocoding) or paste a Google/Apple Maps link
@@ -40,13 +42,15 @@ Data acquisition.
   - **FortyGuard `/v1/heatmap`** → per-tile surface temperature, rendered as a 2D canvas heatmap clipped to your AOI
   - **Overpass (OSM)** → land-cover breakdown (buildings / roads / vegetation / water), clipped exactly to the drawn boundary
   - **FortyGuard `/v1/satellite`** → a centroid spot-check, stored as supporting reference (deliberately *not* shown as an AOI-wide figure — it samples one point, not the whole area)
-- **Forecast +12h** — five hourly slots (+0/+3/+6/+9/+12h) fetched automatically
+- **Forecast +12h** — five hourly slots (+0/+3/+6/+9/+12h), fetched automatically right after the block above, concurrently with each other (see *Why forecast capture waits for the main heatmap* below for why it isn't fired at the same instant as that first block)
 - 3D building massing (deck.gl) with Schematic / Satellite / Land-cover / Photo view modes
 - Saves everything as a **site record** in Supabase, with three generated images
 
 ### 2. Operational Analyst (`/analyst`)
 
 Analysis and decisions, reading only the saved site record — no re-fetching, no extra API credits.
+
+![Operational Analyst — Overview tab, headline outcome and today/longer-term recommendations](public/screen/overview.png)
 
 | Tab | What it gives you |
 |---|---|
@@ -56,7 +60,11 @@ Analysis and decisions, reading only the saved site record — no re-fetching, n
 | **Heat Mitigation Planner** | Deterministic canopy-deficit recommendation + an editable ROI simulator (trees / canopy / solar → cost, energy saved, payback, break-even chart) |
 | **Download PDF** | A print-ready assessment report of everything above |
 
+![Operational Analyst — Hotspot Detection tab, satellite view, pixel-native thermal grid, and per-zone temperature chart](public/screen/heatspot.png)
+
 ### 3. AI Copilot (`/copilot`)
+
+![AI Copilot — choosing a saved site to ask about](public/screen/aicopilot.png)
 
 A DeepSeek-powered chat with function calling over the saved site data — compare interventions, inspect a zone, generate a report, analyse a field photo. It reads the same computation modules the dashboard uses, so the two can't disagree.
 
@@ -306,6 +314,34 @@ offset, so match them to your slots by absolute instant, never by clock-face hou
 **Some fields come back spatially uniform.** For certain AOIs and dates every tile carries an identical temperature, so min = mean = max and the heatmap renders flat. The reading is real, just without spatial detail — larger AOIs generally return more. `isSpatiallyUniform()` detects this so the UI can say so.
 
 **Granularity** is `60 | 80 | 100` metres, chosen from AOI area by `pickGranularity()` to keep tile counts useful. All three are valid; none of them causes the empty-result case.
+
+### Why forecast capture waits for the main heatmap
+
+Map View's Analyze click kicks off two stages, not one flat batch of requests — a deliberate
+cost tradeoff, not a missed optimization:
+
+1. **Stage 1 (parallel):** the whole-day heatmap, the Overpass footprint cross-check, and the
+   satellite tree-canopy spot-check all fire at once (`src/store/analysisStore.ts`,
+   `analyzeAOI()`).
+2. **Stage 2 (parallel *within itself*):** all five +12h forecast slots (+0/+3/+6/+9/+12h) are
+   then fetched together via `Promise.all` (`captureFullForecast()`) — genuinely concurrent
+   with each other, just not with stage 1.
+
+Stage 2 is held back specifically to reuse stage 1's `daysBack` result. As noted above,
+today's FortyGuard data is often not ready yet, so `runHeatmapWithDateFallback()` walks
+backward up to `MAX_HEATMAP_DAYS_BACK` (3) days looking for one that has data — and
+**FortyGuard bills credit on every `Completed` attempt, whether or not it returned usable
+tiles.** Stage 1's whole-day call discovers the correct offset once; stage 2 passes it to
+every forecast slot as `daysBackHint` (`app/api/heatmap/route.ts`) so each slot's first
+attempt already targets a known-good date, instead of every one of the five slots
+independently repeating that same up-to-3-day backward search.
+
+Firing all seven requests in one flat batch at t=0 (no `daysBackHint` available yet) would
+look faster in the UI, but on a lagged-data day it can multiply forecast-related FortyGuard
+credit spend up to ~4x (up to 3 wasted "Completed" attempts per slot, across 5 slots) for a
+saving of a few seconds of perceived latency. No FortyGuard concurrency/rate limit was found
+in their docs or observed live that would otherwise force this staging — it's purely a
+credit-cost decision, made deliberately over full concurrency.
 
 ---
 
