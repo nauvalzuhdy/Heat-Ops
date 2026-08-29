@@ -38,16 +38,22 @@ export default function AnalystTabsShell({
     <div className="flex h-full flex-col gap-3">
       {/* Lives here, not inside one tab, so it stays visible and site-wide
           regardless of which tab is active — see RefreshDataButton.tsx for
-          why one refresh here updates every tab. */}
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
-        <div>
-          <h2 className="text-base font-semibold text-neutral-900 dark:text-white">
-            {row.name ?? `Site ${row.id.slice(0, 8)}`}
-          </h2>
-          <p className="mt-0.5 text-[11px] text-fg-muted">
-            Last updated: {lastUpdatedLabel} · {lastUpdatedTimeLabel}
-          </p>
-        </div>
+          why one refresh here updates every tab.
+          Deliberately kept to ONE line at idle (same height as the plain h2
+          this replaced): name + a small trailing "Last updated" note share
+          the heading's own line instead of adding a second paragraph line
+          under it, and the button sits inline beside them. Every tab below
+          gets its height from `flex-1` off this shell's fixed h-full budget,
+          so header height taken here is dashboard height lost below it — a
+          second permanent line was making every "fill" tab (e.g. Hotspot
+          Detection's map) visibly shorter than before this feature existed. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <h2 className="min-w-0 truncate text-base font-semibold text-neutral-900 dark:text-white">
+          {row.name ?? `Site ${row.id.slice(0, 8)}`}
+          <span className="ml-2 truncate text-[11px] font-normal text-fg-muted">
+            Last updated {lastUpdatedLabel} · {lastUpdatedTimeLabel}
+          </span>
+        </h2>
         <RefreshDataButton siteId={row.id} />
       </div>
 

@@ -17,12 +17,21 @@
 // call updates every one of them — there is no per-panel cache to separately
 // invalidate, because there was never a per-panel copy to begin with.
 //
+// Footprint, deliberately minimal: AnalystTabsShell's header sits above the
+// `flex-1` region every tab's content fills, so any height this adds here is
+// dashboard height lost below it. A first version showed a permanent
+// two-line disclaimer under the button on every render (even idle) plus a
+// growing status block after each refresh — visibly shrinking every "fill"
+// tab. Fixed by: the disclaimer lives in the button's own `title` tooltip
+// (zero permanent space, still reachable on hover) instead of always-visible
+// text, and post-refresh feedback is a small inline line that auto-dismisses
+// after a few seconds rather than becoming a new permanent fixture.
+//
 // What this does NOT refresh: the three saved snapshot images (satellite,
 // heatmap, segmentation photos) — see app/api/sites/[id]/refresh/route.ts's
-// header comment for why. Disclosed here, not hidden, via the info line
-// below the button.
+// header comment for why. Disclosed via the tooltip below, not hidden.
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshCw, CheckCircle2, AlertTriangle } from "lucide-react";
 import { formatCompletionCaption } from "@/lib/formatDuration";
 
@@ -42,11 +51,29 @@ const SECTION_LABEL: Record<keyof RefreshSections, string> = {
   humidity: "Humidity",
 };
 
+// How long the post-refresh caption/error stays visible before this button
+// returns to its idle, zero-footprint state — long enough to read, short
+// enough not to become a permanent dashboard fixture.
+const FEEDBACK_AUTO_DISMISS_MS = 6000;
+
+const BUTTON_TOOLTIP =
+  "Re-runs this site's heatmap, land cover, tree-canopy, and +12h forecast against its existing AOI, and updates every tab here. Saved satellite/heatmap/segmentation photos are not refreshed — those only update by re-analyzing from Map View.";
+
 export default function RefreshDataButton({ siteId }: { siteId: string }) {
   const router = useRouter();
   const [state, setState] = useState<RunState>({ phase: "idle" });
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isRunning = state.phase === "running";
+  useEffect(() => {
+    return () => {
+      if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+    };
+  }, []);
+
+  function scheduleDismiss() {
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+    dismissTimerRef.current = setTimeout(() => setState({ phase: "idle" }), FEEDBACK_AUTO_DISMISS_MS);
+  }
 
   async function handleRefresh() {
     const startedAt = Date.now();
@@ -56,63 +83,57 @@ export default function RefreshDataButton({ siteId }: { siteId: string }) {
       const body = await res.json();
       if (!res.ok || body.ok === false) {
         setState({ phase: "error", message: body.error ?? "Refresh failed — the site's existing data was left unchanged." });
+        scheduleDismiss();
         return;
       }
       const sections = body.sections as RefreshSections;
       const partial = Object.values(sections).some((s) => s === "failed");
       setState({ phase: "done", startedAt, completedAt: Date.now(), sections, partial });
+      scheduleDismiss();
       // Re-fetches this route's Server Components with fresh Supabase data —
       // every tab reading `row` gets the update from this one call.
       router.refresh();
     } catch (err) {
       setState({ phase: "error", message: err instanceof Error ? err.message : "Refresh failed." });
+      scheduleDismiss();
     }
   }
 
+  const isRunning = state.phase === "running";
+
   return (
-    <div className="flex flex-col items-end gap-1">
+    // items-center + one row: feedback sits INLINE to the left of the button
+    // (truncated, one line) rather than stacking a new line under it, so
+    // appearing/disappearing never reflows this shell's own row height.
+    <div className="flex min-w-0 items-center gap-2">
+      {state.phase === "done" && (
+        <span className="flex min-w-0 items-center gap-1 truncate text-[10px] text-fg-muted" title={state.partial ? Object.keys(state.sections).filter((k) => state.sections[k as keyof RefreshSections] === "failed").map((k) => SECTION_LABEL[k as keyof RefreshSections]).join(", ") + " didn't return this time — kept the previous data for those." : undefined}>
+          {state.partial ? (
+            <AlertTriangle size={11} className="shrink-0 text-severity-caution" />
+          ) : (
+            <CheckCircle2 size={11} className="shrink-0 text-severity-nominal" />
+          )}
+          <span className="truncate">
+            {formatCompletionCaption(state.startedAt, state.completedAt)}
+            {state.partial ? " (partial)" : ""}
+          </span>
+        </span>
+      )}
+      {state.phase === "error" && (
+        <span className="max-w-[200px] truncate text-[10px] text-severity-critical" title={state.message}>
+          {state.message}
+        </span>
+      )}
       <button
         type="button"
         onClick={handleRefresh}
         disabled={isRunning}
-        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
+        title={BUTTON_TOOLTIP}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-neutral-200 px-2.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-900"
       >
-        <RefreshCw size={13} className={isRunning ? "animate-spin" : ""} />
-        {isRunning ? "Refreshing…" : "Refresh Latest Data"}
+        <RefreshCw size={12} className={isRunning ? "animate-spin" : ""} />
+        {isRunning ? "Refreshing…" : "Refresh"}
       </button>
-
-      {state.phase === "done" && (
-        <div className="flex flex-col items-end gap-0.5 text-right">
-          <span className="flex items-center gap-1 text-[10px] text-fg-muted">
-            {state.partial ? (
-              <AlertTriangle size={11} className="text-severity-caution" />
-            ) : (
-              <CheckCircle2 size={11} className="text-severity-nominal" />
-            )}
-            {formatCompletionCaption(state.startedAt, state.completedAt)}
-          </span>
-          {state.partial && (
-            <span className="max-w-[220px] text-[10px] leading-snug text-severity-caution">
-              {(Object.keys(state.sections) as (keyof RefreshSections)[])
-                .filter((k) => state.sections[k] === "failed")
-                .map((k) => SECTION_LABEL[k])
-                .join(", ")}{" "}
-              didn&apos;t return this time — kept the previous data for those.
-            </span>
-          )}
-        </div>
-      )}
-
-      {state.phase === "error" && (
-        <span className="max-w-[220px] text-right text-[10px] leading-snug text-severity-critical">{state.message}</span>
-      )}
-
-      {/* Disclosed, not hidden — see app/api/sites/[id]/refresh/route.ts's
-          header comment for why this specific limitation exists. */}
-      <span className="max-w-[220px] text-right text-[10px] leading-snug text-fg-muted">
-        Updates numbers, forecast, canopy %, and ROI. Saved snapshot images update only when re-analyzed from Map
-        View.
-      </span>
     </div>
   );
 }
