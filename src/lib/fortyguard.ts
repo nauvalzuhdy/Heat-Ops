@@ -16,6 +16,46 @@ function apiKey(): string {
   return key;
 }
 
+// Bug found 2026-08-29: every raw fetch() to FortyGuard below had NO timeout
+// at all. The 45s-and-similar "poll budgets" built earlier only bound the
+// NUMBER of status-check attempts and the sleep between them — they never
+// bounded how long a single underlying fetch() could hang if the network or
+// FortyGuard genuinely never answered (as opposed to answering with an error,
+// which every prior test that night happened to exercise). A hung SUBMIT call
+// in particular never even reaches the poll loop, so that budget never starts
+// — the request just hangs forever. Client-side, that left `data.satellite`
+// stuck at `{status:"pending"}` indefinitely, which analysisStore.ts's
+// save-prompt gate (added the same day) then waited on forever — the exact
+// "stuck on Analyzing tree canopy, can't save" symptom this fixes.
+//
+// `fetchWithTimeout` is now the ONLY way this file talks to FortyGuard.
+// AbortSignal.timeout() is a standard Node/fetch API (Node 17.3+), no new
+// dependency. 20s per call is generous against every response time actually
+// observed live tonight (submits ~2-3s, status checks a few seconds) while
+// still failing well within any UI-visible wait.
+const FORTYGUARD_FETCH_TIMEOUT_MS = 20_000;
+
+class FortyGuardFetchTimeoutError extends Error {
+  constructor(url: string, timeoutMs: number) {
+    super(`FortyGuard request to ${url} did not respond within ${timeoutMs / 1000}s.`);
+    this.name = "FortyGuardFetchTimeoutError";
+  }
+}
+
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(FORTYGUARD_FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    // AbortSignal.timeout() rejects with a DOMException named "TimeoutError" (distinct from a caller-initiated "AbortError") — normalized here into one
+    // typed, descriptive error so every caller sees a real reason instead of a
+    // generic "fetch failed" or, worse, an unresolved promise.
+    if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+      throw new FortyGuardFetchTimeoutError(url, FORTYGUARD_FETCH_TIMEOUT_MS);
+    }
+    throw err;
+  }
+}
+
 // One flag governs both /v1/heatmap and /v1/satellite — mirrors the
 // FortyGuard Quickstart notebook's CACHED=True testing mode ("a cached mode
 // you can use to test your code without spending credits"). Overpass
@@ -83,7 +123,7 @@ async function submitSatelliteSegmentation(params: {
   startDate: string;
   granularity: 60 | 80 | 100;
 }): Promise<string> {
-  const res = await fetch(`${FORTYGUARD_BASE_URL}/v1/satellite`, {
+  const res = await fetchWithTimeout(`${FORTYGUARD_BASE_URL}/v1/satellite`, {
     method: "POST",
     headers: { "api-key": apiKey(), "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -105,7 +145,7 @@ async function submitSatelliteSegmentation(params: {
 }
 
 async function checkStatus<TResult>(activityId: string): Promise<StatusResponse<TResult>["data"]> {
-  const res = await fetch(`${FORTYGUARD_BASE_URL}/v1/status/${activityId}`, {
+  const res = await fetchWithTimeout(`${FORTYGUARD_BASE_URL}/v1/status/${activityId}`, {
     headers: { "api-key": apiKey() },
   });
 
@@ -165,8 +205,20 @@ async function pollUntilDone<TResult>(
     await sleep(delay);
     waited += delay;
 
-    const data = await checkStatus<TResult>(activityId);
+    let data: Awaited<ReturnType<typeof checkStatus<TResult>>> | null = null;
+    try {
+      data = await checkStatus<TResult>(activityId);
+    } catch (err) {
+      if (!(err instanceof FortyGuardFetchTimeoutError)) throw err;
+      // One status check not answering within 20s is treated as this
+      // attempt still "Processing" — logged, then retried on the next
+      // backoff step — rather than aborting the whole activity over a
+      // single flaky network round-trip. maxAttempts is still the ceiling,
+      // so this cannot turn into an unbounded wait either.
+      pollLog(label, `status check timed out (20s), treating as still Processing`);
+    }
     const elapsedS = ((performance.now() - startedAt) / 1000).toFixed(1);
+    if (data == null) continue;
     if (data.status === "Completed") {
       pollLog(label, `COMPLETE — ${elapsedS}s, ${attempt + 1} status check(s)`);
       if (!data.result) throw new Error(`FortyGuard activity ${activityId} completed with no result`);
@@ -243,7 +295,7 @@ async function submitEnvParams(params: {
   temperature: number;
   startDate: string;
 }): Promise<string> {
-  const res = await fetch(`${FORTYGUARD_BASE_URL}/v1/env_params`, {
+  const res = await fetchWithTimeout(`${FORTYGUARD_BASE_URL}/v1/env_params`, {
     method: "POST",
     headers: { "api-key": apiKey(), "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -423,7 +475,7 @@ async function submitHeatmap(params: {
   filterType: 1 | 3;
   granularity: 60 | 80 | 100;
 }): Promise<string> {
-  const res = await fetch(`${FORTYGUARD_BASE_URL}/v1/heatmap`, {
+  const res = await fetchWithTimeout(`${FORTYGUARD_BASE_URL}/v1/heatmap`, {
     method: "POST",
     headers: { "api-key": apiKey(), "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -605,7 +657,15 @@ export async function runSatelliteWithDateFallback(params: {
       // just multiplies the wait the user is sitting through. Measured
       // 2026-08-29: every date behaved identically, so the walk had nothing to
       // find and only cost time.
-      if (err instanceof FortyGuardPollTimeoutError) break;
+      //
+      // Two distinct timeout classes both count: FortyGuardPollTimeoutError
+      // (submit succeeded, polling for a terminal state gave up) and
+      // FortyGuardFetchTimeoutError (a raw fetch — submit itself, or every
+      // status check in a row — never got a response at all within 20s each).
+      // Both mean "this endpoint is not answering right now", not "this date
+      // has no data", so both should stop the walk rather than burn the
+      // remaining date budget re-asking a connection that isn't responding.
+      if (err instanceof FortyGuardPollTimeoutError || err instanceof FortyGuardFetchTimeoutError) break;
     }
   }
 

@@ -109,12 +109,20 @@ export default function AnalyzePanel() {
   const [siteId, setSiteId] = useState<string | null>(null);
   const [nameModalOpen, setNameModalOpen] = useState(false);
   const [namePrompted, setNamePrompted] = useState(false);
+  // Manual escape hatch: even with the 2026-08-29 hang fix (every FortyGuard
+  // fetch now times out and postJSON never rejects, so `data.satellite` is
+  // now GUARANTEED to leave "pending" within a bounded time rather than
+  // potentially forever), that bound can still be a real ~45-120s during a
+  // live FortyGuard slowdown. A user who doesn't want to wait even that long
+  // can choose to save without canopy — a conscious choice, not a forced one.
+  const [canopyWaitSkipped, setCanopyWaitSkipped] = useState(false);
 
   useEffect(() => {
     setSiteSaveStatus("idle");
     setSiteId(null);
     setNameModalOpen(false);
     setNamePrompted(false);
+    setCanopyWaitSkipped(false);
   }, [geometry]);
 
   useEffect(() => {
@@ -136,11 +144,11 @@ export default function AnalyzePanel() {
     // its own ~45s poll budget (lib/fortyguard.ts), so this adds at most
     // that much extra wait, in parallel with (not stacked after) the heat
     // display the user is already looking at.
-    if (data.satellite.status === "pending") return;
+    if (data.satellite.status === "pending" && !canopyWaitSkipped) return;
 
     setNamePrompted(true);
     setNameModalOpen(true);
-  }, [status, data, geometry, heatmapImageUrl, namePrompted]);
+  }, [status, data, geometry, heatmapImageUrl, namePrompted, canopyWaitSkipped]);
 
   async function saveSite(name: string | null) {
     if (!data || !geometry) return;
@@ -148,6 +156,17 @@ export default function AnalyzePanel() {
 
     const segmentationImageDataUrl =
       data.overpass.status === "ok" ? generateSegmentationImage(geometry, data.overpass.result).toDataURL("image/png") : null;
+
+    // buildSiteRecord() (app/api/sites/route.ts) only ever understands
+    // ok/error — never "pending". The gating effect above normally keeps
+    // this prompt from opening while satellite is still pending at all, but
+    // the manual "save without waiting" escape hatch can reach here with
+    // `data.satellite` still literally pending, so it is turned into an
+    // honest error here rather than sent as-is.
+    const satelliteForSave =
+      data.satellite.status === "pending"
+        ? { status: "error" as const, message: "Skipped by the user before this run's canopy segmentation finished." }
+        : data.satellite;
 
     try {
       const res = await fetch("/api/sites", {
@@ -159,7 +178,7 @@ export default function AnalyzePanel() {
           areaSqKm: data.areaSqKm,
           centroid: data.centroid,
           heatmap: data.heatmap,
-          satellite: data.satellite,
+          satellite: satelliteForSave,
           overpass: data.overpass,
           segmentationImageDataUrl,
           heatImageDataUrl: heatmapImageUrl,
@@ -368,10 +387,24 @@ export default function AnalyzePanel() {
                   progress percentage. It only shows while the name-prompt
                   below is deliberately held back waiting for this same
                   status to settle. */}
-              {status === "success" && data?.satellite.status === "pending" && (
-                <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface-2 px-3 py-2.5 text-[11px] text-fg-muted">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-fg-muted" />
-                  Analyzing tree canopy in the background — heat analysis above is already final.
+              {status === "success" && data?.satellite.status === "pending" && !canopyWaitSkipped && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-border-subtle bg-surface-2 px-3 py-2.5 text-[11px] text-fg-muted">
+                  <span className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-fg-muted" />
+                    Analyzing tree canopy in the background — heat analysis above is already final.
+                  </span>
+                  {/* Every FortyGuard fetch now has its own timeout (2026-08-29
+                      fix), so this can no longer hang forever — but it can
+                      still take up to ~45-120s on a slow day, and this button
+                      lets the user consciously skip that wait rather than
+                      being forced to sit through it. */}
+                  <button
+                    type="button"
+                    onClick={() => setCanopyWaitSkipped(true)}
+                    className="shrink-0 whitespace-nowrap underline underline-offset-2 hover:text-fg-secondary"
+                  >
+                    Save now, without waiting
+                  </button>
                 </div>
               )}
               {status === "success" && data?.satellite.status === "error" && (

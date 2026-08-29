@@ -162,23 +162,48 @@ type LandcoverRouteBody =
 
 type SatelliteRouteBody = { fortyguard: EndpointResult<SatelliteSegmentationResult> } | { error: string };
 
+// Never rejects. Found 2026-08-29: the satellite call below is fired as
+// `void postJSON(...).then(...)` — not awaited inside analyzeAOI's own
+// try/catch, so a rejection here (a network failure, or res.json() failing to
+// parse) became a genuinely unhandled promise rejection that never reached
+// the `.then()` at all. `data.satellite` then stayed `{status:"pending"}`
+// forever, which the save-prompt gate (correctly) waits on indefinitely —
+// that combination is exactly the "stuck on Analyzing tree canopy, can't
+// save" symptom this fixes. Catching internally and always resolving with
+// `{ok:false, body:{error}}` makes every caller's existing error handling
+// (which already treats `ok:false` as a normal, expected outcome) cover this
+// case too, for heatmap/landcover/forecast as well as satellite — none of
+// them need their own try/catch added.
 async function postJSON<TBody>(
   url: string,
   geometry: Polygon,
   hourOffset?: number,
   daysBackHint?: number
 ): Promise<{ ok: boolean; body: TBody }> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      geometry,
-      ...(hourOffset === undefined ? {} : { hourOffset }),
-      ...(daysBackHint === undefined ? {} : { daysBackHint }),
-    }),
-  });
-  const body: TBody = await res.json();
-  return { ok: res.ok, body };
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        geometry,
+        ...(hourOffset === undefined ? {} : { hourOffset }),
+        ...(daysBackHint === undefined ? {} : { daysBackHint }),
+      }),
+      // Defense in depth alongside the server-side fetch timeouts added the
+      // same day (lib/fortyguard.ts): a browser fetch has no meaningful
+      // default timeout of its own, so a hung client<->server connection
+      // (as opposed to a hung FortyGuard call, which the server-side fix
+      // already bounds) would otherwise wait indefinitely too. 120s is
+      // generous against every route this calls, including satellite's own
+      // worst-case bounded wait.
+      signal: AbortSignal.timeout(120_000),
+    });
+    const body: TBody = await res.json();
+    return { ok: res.ok, body };
+  } catch (err) {
+    console.error(`[postJSON] ${url} failed:`, err);
+    return { ok: false, body: { error: err instanceof Error ? err.message : "Request failed" } as TBody };
+  }
 }
 
 // Shared by selectForecastSlot (one user-clicked offset) and
