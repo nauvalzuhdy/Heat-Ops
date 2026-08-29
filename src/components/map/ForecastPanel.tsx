@@ -6,7 +6,7 @@ import type { Polygon } from "geojson";
 import { FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
 import { formatForecastTimeLabel, formatForecastDateLabel } from "@/lib/wbgt";
 import { formatFallbackDateLabel } from "@/lib/relativeTime";
-import { useAnalysisStore } from "@/store/analysisStore";
+import { useAnalysisStore, buildHeatForecastEntries } from "@/store/analysisStore";
 import StepProgressBar from "./StepProgressBar";
 import { SourceBadge } from "./AreaMetricCard";
 import HeatmapImage from "./HeatmapImage";
@@ -156,21 +156,7 @@ export default function ForecastPanel({ geometry, siteId }: { geometry: Polygon;
     const hasNewOffset = okOffsets.some((h) => !syncedOffsetsRef.current.has(h));
     if (!hasNewOffset) return;
 
-    const heatForecastEntries = okOffsets.map((h) => {
-      const slot = heatForecast[h];
-      // okOffsets is already filtered to status === "ok", so this branch is
-      // exhaustive in practice — the fallbacks exist only to satisfy the
-      // type checker's narrowing, never actually taken.
-      return {
-        hourOffset: h,
-        targetTime: slot.status === "ok" ? slot.targetTime : new Date().toISOString(),
-        meanTempC: slot.status === "ok" ? slot.meanTempC : 0,
-        cached: slot.status === "ok" ? Boolean(slot.cached) : false,
-        capturedAt: slot.capturedAt,
-        dateUsed: slot.status === "ok" ? slot.dateUsed : "",
-        isFallbackDate: slot.status === "ok" ? slot.isFallbackDate : false,
-      };
-    });
+    const heatForecastEntries = buildHeatForecastEntries(heatForecast);
 
     fetch("/api/sites", {
       method: "PATCH",

@@ -3,6 +3,7 @@ import type { Polygon } from "geojson";
 import type { HeatmapResult, SatelliteSegmentationResult } from "@/lib/fortyguard";
 import type { OverpassLandCover } from "@/lib/overpass";
 import { FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
+import type { HeatForecastEntry } from "@/lib/siteRecord";
 
 // `cached` marks results served by FortyGuard's cached/dev mode (see
 // lib/fortyguard.ts) instead of a live, credit-consuming call — always
@@ -58,6 +59,31 @@ export type ForecastSlot =
       isFallbackDate: boolean;
     }
   | { status: "error"; message: string; capturedAt: string };
+
+// Shared by AnalyzePanel.tsx (saves this directly into the initial site
+// record, alongside heatmap/landcover/satellite, once the gating effect has
+// confirmed capturingForecast is false) and ForecastPanel.tsx (PATCHes it in
+// afterward as a reactive fallback for any case that doesn't go through that
+// gate, e.g. a slot that later gets re-fetched). Extracted 2026-08-29 so both
+// call sites build the exact same shape from the exact same `heatForecast`
+// state, rather than risking drift between two independent transforms.
+export function buildHeatForecastEntries(heatForecast: Record<number, ForecastSlot>): HeatForecastEntry[] {
+  return FORECAST_HOUR_OFFSETS.filter((h) => heatForecast[h]?.status === "ok").map((h) => {
+    const slot = heatForecast[h];
+    // Filtered to status === "ok" above, so this branch is exhaustive in
+    // practice — the fallbacks exist only to satisfy the type checker's
+    // narrowing, never actually taken.
+    return {
+      hourOffset: h,
+      targetTime: slot.status === "ok" ? slot.targetTime : new Date().toISOString(),
+      meanTempC: slot.status === "ok" ? slot.meanTempC : 0,
+      cached: slot.status === "ok" ? Boolean(slot.cached) : false,
+      capturedAt: slot.capturedAt,
+      dateUsed: slot.status === "ok" ? slot.dateUsed : "",
+      isFallbackDate: slot.status === "ok" ? slot.isFallbackDate : false,
+    };
+  });
+}
 
 // Progress reporting for the Analyze run (UI feedback pass).
 //
@@ -193,10 +219,11 @@ async function postJSON<TBody>(
       // same day (lib/fortyguard.ts): a browser fetch has no meaningful
       // default timeout of its own, so a hung client<->server connection
       // (as opposed to a hung FortyGuard call, which the server-side fix
-      // already bounds) would otherwise wait indefinitely too. 120s is
-      // generous against every route this calls, including satellite's own
-      // worst-case bounded wait.
-      signal: AbortSignal.timeout(120_000),
+      // already bounds) would otherwise wait indefinitely too. Satellite's
+      // own worst-case bounded wait is ~201s (SATELLITE_POLL_MAX_ATTEMPTS) —
+      // 230s stays comfortably above that plus network/overhead margin,
+      // while every other route this calls finishes far sooner regardless.
+      signal: AbortSignal.timeout(230_000),
     });
     const body: TBody = await res.json();
     return { ok: res.ok, body };
@@ -389,6 +416,23 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       // over, every single time, regardless of how fast heatmap/landcover
       // themselves were. It resolves into `data.satellite` whenever it
       // lands, via the `.then()` below, without blocking anything above it.
+      // Found 2026-08-29 (browser test after raising the satellite poll
+      // budget): satellite frequently resolves BEFORE heatmap+landcover now
+      // (heatmap's own FortyGuard poll routinely outlasts it), and `data` is
+      // still `null` at that point — the main `data` object below isn't
+      // constructed until the Promise.all beneath this settles. The `set()`
+      // here was a no-op in that case (state.data was null), silently
+      // dropping a satellite result that had already arrived, and the
+      // unconditional `satellite: { status: "pending" }` a few lines below
+      // then overwrote it with "pending" forever — `data.satellite` never
+      // updated again for the rest of the run. That is the actual mechanism
+      // behind "tree canopy never succeeds"/the skip option always being
+      // offered: it wasn't FortyGuard being slow, it was a real result being
+      // thrown away because it arrived early. `satelliteResult` closes over
+      // this run and is read directly when constructing the initial `data`
+      // below, so an early arrival is captured instead of discarded; a late
+      // arrival still goes through the `set()` below exactly as before.
+      let satelliteResult: SatelliteResult = { status: "pending" };
       void postJSON<SatelliteRouteBody>("/api/satellite/segmentation", geometry).then((res) => {
         markTask("satellite", res.ok);
         if (requestId !== latestRequestId) return; // superseded — a stale result must not land on a newer run's data
@@ -396,9 +440,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           res.ok && "fortyguard" in res.body
             ? res.body.fortyguard
             : { status: "error", message: ("error" in res.body && res.body.error) || "Tree-canopy segmentation failed." };
-        // A no-op if analyzeAOI ultimately failed and never set `data` at
-        // all (state.data stays null) — nothing to attach this to in that
-        // case, matching how forecast slots already behave on a failed run.
+        satelliteResult = satellite;
+        // A no-op if `data` isn't built yet (this arrived first — captured
+        // via `satelliteResult` above instead) or if analyzeAOI ultimately
+        // failed and never set `data` at all (state.data stays null).
         set((state) => (state.data ? { data: { ...state.data, satellite } } : state));
       });
 
@@ -451,11 +496,12 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
                   status: "error",
                   message: ("error" in heatmapRes.body && heatmapRes.body.error) || "Heatmap generation failed",
                 },
-          // Fired separately above and not part of this Promise.all — this
-          // is its initial state the instant Map View shows the main
-          // result; the satellitePromise .then() updates it in place once
-          // /v1/satellite actually settles, independent of everything here.
-          satellite: { status: "pending" } satisfies SatelliteResult,
+          // Fired separately above and not part of this Promise.all. Reads
+          // whatever satelliteResult already holds — still "pending" if
+          // satellite hasn't settled yet (the normal case; its `.then()`
+          // above updates `data` in place once it does), but the already-
+          // arrived value if it settled first (see the comment above it).
+          satellite: satelliteResult,
           overpass:
             landcoverRes.ok && "overpass" in landcoverRes.body
               ? landcoverRes.body.overpass

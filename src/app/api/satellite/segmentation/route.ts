@@ -27,6 +27,12 @@ import { runSatelliteWithDateFallback } from "@/lib/fortyguard";
 import { MAX_AOI_AREA_SQKM } from "@/lib/mapConfig";
 
 export const dynamic = "force-dynamic";
+// FortyGuard can take ~180s to reach a terminal state on a slow day (see
+// runSatelliteWithDateFallback's ~201s poll budget in lib/fortyguard.ts) —
+// without this, Vercel's default function timeout would kill the request
+// before that budget is ever reached. Actual ceiling still depends on the
+// Vercel plan (Hobby caps at 60s regardless of this value).
+export const maxDuration = 230;
 
 // Start at 100m granularity during development — see project brief.
 const SATELLITE_GRANULARITY = 100;

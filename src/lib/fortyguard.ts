@@ -397,19 +397,22 @@ export function relativeHumidityAt(result: EnvParamsResult, targetTimeIso: strin
 
 // Measured against the live API on 2026-08-29: four /v1/satellite activities
 // across two US locations and three dates each sat in "Processing" for 174-181s
-// and then returned "Failed". The shared 105s budget therefore never sees a
-// terminal state for this endpoint at all — it gives up ~76s early and reports a
-// timeout, which is why the real outcome was invisible.
+// before reaching a terminal state (either Completed or Failed).
 //
-// Waiting the full ~180s is the wrong answer though: /api/landcover holds the
-// Analyze run until BOTH its calls settle, so a segmentation that is going to
-// fail would stall every analysis by three minutes to learn nothing. This
-// budget is deliberately shorter than the shared one: a segmentation that is
-// coming back quickly still lands, and one that is not degrades to "spot-check
-// unavailable" fast enough to keep the run usable. Raise it if FortyGuard's
-// satellite latency improves.
-const SATELLITE_POLL_BACKOFF_MS = [3000, 6000, 9000];
-const SATELLITE_POLL_MAX_ATTEMPTS = 6; // 3+6+9+9+9+9 = 45s
+// This used to be capped at 45s specifically because /api/landcover awaited
+// this call and held Map View's main heat+land-cover display until it
+// settled — so a slow satellite call meant a slow Analyze run for everyone,
+// regardless of outcome. That is no longer true: satellite tree-canopy
+// segmentation now lives in its own route (api/satellite/segmentation) fired
+// independently and never awaited by Map View's main result (see
+// analysisStore.ts's analyzeAOI — the `void postJSON(...)` call). Nothing
+// downstream is blocked by how long this takes anymore, so there is no
+// reason to give up before FortyGuard's own measured ~180s answer time —
+// doing so was misreporting a real (if slow) Completed/Failed outcome as a
+// timeout. Sized to comfortably clear 181s with margin. Raise further only
+// if FortyGuard's latency gets worse than this.
+const SATELLITE_POLL_BACKOFF_MS = [3000, 6000, 12000];
+const SATELLITE_POLL_MAX_ATTEMPTS = 18; // 3+6+12*16 = 201s
 
 export async function runSatelliteSegmentation(params: {
   latitude: number;
@@ -595,17 +598,21 @@ export type SatelliteWithDateFallback = {
  * segmentation. The search is capped at the same MAX_HEATMAP_DAYS_BACK.
  *
  * It is ALSO capped in wall-clock time, which the heatmap walk does not need to
- * be. A single poll cycle can run to POLL_MAX_ATTEMPTS (~105s) before giving up,
- * so a naive four-date walk over repeated timeouts would spend ~7 minutes — and
- * /api/landcover is one of the two requests the user is already waiting on.
- * Walking back helps when a date genuinely has no data yet (fast, cheap answers);
- * it does not help when the endpoint is simply slow, so once the budget is spent
- * this stops and reports rather than compounding the wait.
+ * be. A single poll cycle can now run to SATELLITE_POLL_MAX_ATTEMPTS (~201s)
+ * before giving up, so a naive four-date walk over repeated timeouts would
+ * spend over 13 minutes — this route runs independently of Map View's main
+ * result (nothing awaits it — see analysisStore.ts), but it should still not
+ * run unboundedly long. Walking back helps when a date genuinely has no data
+ * yet (fast, cheap answers); it does not help when the endpoint is simply
+ * slow (a timeout `break`s the walk immediately, below — see that comment),
+ * so this budget mainly bounds a chain of fast-but-empty (degenerate)
+ * results across dates, not a chain of timeouts.
  */
 /**
  * Wall-clock budget for ADDITIONAL date attempts (the first is always made).
- * Sized just under one full poll cycle so a single slow-but-successful call is
- * never cut short, while a chain of timeouts cannot stack up.
+ * Deliberately much shorter than one full poll cycle: a chain of genuinely
+ * empty-but-fast results across dates should stay quick, and a slow single
+ * date is handled by its own generous per-call budget above, not by this one.
  */
 const SATELLITE_FALLBACK_BUDGET_MS = 90_000;
 

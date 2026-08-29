@@ -2,8 +2,9 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useAOIStore } from "@/store/aoiStore";
-import { useAnalysisStore } from "@/store/analysisStore";
+import { useAnalysisStore, buildHeatForecastEntries } from "@/store/analysisStore";
 import type { AnalysisTaskState } from "@/store/analysisStore";
 import { MAX_AOI_AREA_SQKM, FORECAST_HOUR_OFFSETS } from "@/lib/mapConfig";
 import { LANDCOVER_COLORS } from "@/lib/landcoverColors";
@@ -15,6 +16,9 @@ import AnalyzeProgress from "./AnalyzeProgress";
 import HeatmapImage from "./HeatmapImage";
 import ForecastPanel from "./ForecastPanel";
 import SiteNameModal from "./SiteNameModal";
+
+// See canopySkipOffered below for why this exists and why 18s.
+const CANOPY_SKIP_OFFER_DELAY_MS = 18_000;
 
 function StatCell({ label, value }: { label: string; value: string }) {
   return (
@@ -78,6 +82,7 @@ function LoadingRow({ state }: { state?: AnalysisTaskState }) {
 }
 
 export default function AnalyzePanel() {
+  const router = useRouter();
   const geometry = useAOIStore((s) => s.geometry);
   const areaSqKm = useAOIStore((s) => s.areaSqKm);
   const isOverAreaLimit = useAOIStore((s) => s.isOverAreaLimit);
@@ -112,10 +117,21 @@ export default function AnalyzePanel() {
   // Manual escape hatch: even with the 2026-08-29 hang fix (every FortyGuard
   // fetch now times out and postJSON never rejects, so `data.satellite` is
   // now GUARANTEED to leave "pending" within a bounded time rather than
-  // potentially forever), that bound can still be a real ~45-120s during a
-  // live FortyGuard slowdown. A user who doesn't want to wait even that long
-  // can choose to save without canopy — a conscious choice, not a forced one.
+  // potentially forever), that bound can still be a real ~3.5min during a
+  // live FortyGuard slowdown (SATELLITE_POLL_MAX_ATTEMPTS in lib/fortyguard.ts).
+  // A user who doesn't want to wait even that long can choose to save
+  // without canopy — a conscious choice, not a forced one, and (see
+  // canopySkipOffered below) not offered until it's actually been slow.
   const [canopyWaitSkipped, setCanopyWaitSkipped] = useState(false);
+  // Gates the "Save now, without waiting" button specifically (not the
+  // "Analyzing tree canopy…" indicator itself, which shows the whole time
+  // satellite is pending). Without this, the skip option appeared instantly
+  // the moment heatmap+Overpass finished — even on a run where satellite was
+  // about to land in a few seconds — which read as "this always wants me to
+  // skip" (2026-08-29 bug report) rather than as a genuine fallback for a
+  // slow run. 18s chosen with the user: long enough that a normal-speed
+  // satellite call (see lib/fortyguard.ts) settles on its own first.
+  const [canopySkipOffered, setCanopySkipOffered] = useState(false);
 
   useEffect(() => {
     setSiteSaveStatus("idle");
@@ -123,7 +139,18 @@ export default function AnalyzePanel() {
     setNameModalOpen(false);
     setNamePrompted(false);
     setCanopyWaitSkipped(false);
+    setCanopySkipOffered(false);
   }, [geometry]);
+
+  useEffect(() => {
+    if (status === "success" && data?.satellite.status === "pending") {
+      const timer = setTimeout(() => setCanopySkipOffered(true), CANOPY_SKIP_OFFER_DELAY_MS);
+      return () => clearTimeout(timer);
+    }
+    // Satellite settled (or a fresh run started) — not offering a skip for
+    // something that is no longer pending.
+    setCanopySkipOffered(false);
+  }, [status, data?.satellite.status]);
 
   useEffect(() => {
     if (status !== "success" || !data || !geometry) return;
@@ -141,14 +168,38 @@ export default function AnalyzePanel() {
     // Waiting here, rather than teaching that whole pipeline a third state,
     // keeps persistence, Operational Analyst, and the canopy recommendation/
     // ROI pipeline completely untouched. Bounded: satellite gives up after
-    // its own ~45s poll budget (lib/fortyguard.ts), so this adds at most
+    // its own ~201s poll budget (lib/fortyguard.ts), so this adds at most
     // that much extra wait, in parallel with (not stacked after) the heat
     // display the user is already looking at.
     if (data.satellite.status === "pending" && !canopyWaitSkipped) return;
+    // 2026-08-29 bug: this effect never checked `capturingForecast`, so the
+    // save prompt (and, since saveSite() now auto-navigates to Operational
+    // Analyst, the redirect itself) could fire before any of the 5 forecast
+    // slots (§4.4, Now/+3h/+6h/+9h/+12h — analysisStore.ts's
+    // captureFullForecast) had landed. There was no hardcoded timer causing
+    // this — captureFullForecast fires fire-and-forget right after `status`
+    // flips to "success" (not awaited by analyzeAOI), and nothing here ever
+    // waited for it. Each slot has its own bounded per-request timeout (same
+    // /api/heatmap route + postJSON's 230s abort as the main heatmap call,
+    // NOT one shared global timer — see fetchForecastSlot), so this can add
+    // up to that much wait, but never hangs forever.
+    if (capturingForecast) return;
 
     setNamePrompted(true);
     setNameModalOpen(true);
-  }, [status, data, geometry, heatmapImageUrl, namePrompted, canopyWaitSkipped]);
+  }, [status, data, geometry, heatmapImageUrl, namePrompted, canopyWaitSkipped, capturingForecast]);
+
+  // Regression guard for the exact bug just fixed: if this ever fires again,
+  // the effect above regressed back to prompting/redirecting while forecast
+  // capture is still running.
+  useEffect(() => {
+    if (namePrompted && capturingForecast) {
+      console.warn(
+        "[AnalyzePanel] Save prompt opened while forecast capture was still in progress — " +
+          "this should be impossible; the gating effect is supposed to wait for capturingForecast to clear first.",
+      );
+    }
+  }, [namePrompted, capturingForecast]);
 
   async function saveSite(name: string | null) {
     if (!data || !geometry) return;
@@ -188,6 +239,40 @@ export default function AnalyzePanel() {
       if (!res.ok) throw new Error(body.error ?? "Failed to save site record");
       setSiteId(body.siteId);
       setSiteSaveStatus("saved");
+
+      // 2026-08-29 bug: this used to redirect immediately, relying on
+      // ForecastPanel's own PATCH effect to persist heat_forecast into the
+      // row afterward. That PATCH is fired async and races the navigation —
+      // observed live: Operational Analyst's server-rendered page fetched
+      // the row before the PATCH had landed, showing "No forecast hours
+      // were captured" even though the DB had all 5 slots moments later.
+      // The gating effect above guarantees capturingForecast is already
+      // false by the time this function runs, so `heatForecast` already
+      // holds every slot's final value — PATCH it in and wait for it here,
+      // before navigating, instead of leaving it to arrive whenever it
+      // arrives. ForecastPanel's own effect still runs too (harmless no-op:
+      // same offsets, and PATCH's humidity enrichment already recognizes
+      // this run's values as stored and skips re-calling /v1/env_params).
+      const heatForecastEntries = buildHeatForecastEntries(heatForecast);
+      if (heatForecastEntries.length > 0) {
+        try {
+          const forecastRes = await fetch("/api/sites", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ siteId: body.siteId, heatForecast: heatForecastEntries }),
+          });
+          if (!forecastRes.ok) {
+            console.error(`[sites] PATCH heat_forecast before redirect failed: ${forecastRes.status}`);
+          }
+        } catch (err) {
+          // Not fatal to the save itself — the site row already exists with
+          // heatmap/landcover/satellite. Operational Analyst's own Refresh
+          // button can re-populate forecast if this PATCH didn't make it.
+          console.error("[sites] PATCH heat_forecast before redirect failed:", err);
+        }
+      }
+
+      router.push(`/analyst?siteId=${body.siteId}`);
     } catch (err) {
       console.error("[sites] save failed:", err);
       setSiteSaveStatus("error");
@@ -395,16 +480,21 @@ export default function AnalyzePanel() {
                   </span>
                   {/* Every FortyGuard fetch now has its own timeout (2026-08-29
                       fix), so this can no longer hang forever — but it can
-                      still take up to ~45-120s on a slow day, and this button
-                      lets the user consciously skip that wait rather than
-                      being forced to sit through it. */}
-                  <button
-                    type="button"
-                    onClick={() => setCanopyWaitSkipped(true)}
-                    className="shrink-0 whitespace-nowrap underline underline-offset-2 hover:text-fg-secondary"
-                  >
-                    Save now, without waiting
-                  </button>
+                      still take up to ~3.5min on a slow day (see
+                      SATELLITE_POLL_MAX_ATTEMPTS in lib/fortyguard.ts), and
+                      this button lets the user consciously skip that wait
+                      rather than being forced to sit through it. Held back
+                      for CANOPY_SKIP_OFFER_DELAY_MS above so it reads as a
+                      fallback for a genuinely slow run, not the default. */}
+                  {canopySkipOffered && (
+                    <button
+                      type="button"
+                      onClick={() => setCanopyWaitSkipped(true)}
+                      className="shrink-0 whitespace-nowrap underline underline-offset-2 hover:text-fg-secondary"
+                    >
+                      Save now, without waiting
+                    </button>
+                  )}
                 </div>
               )}
               {status === "success" && data?.satellite.status === "error" && (
@@ -413,6 +503,21 @@ export default function AnalyzePanel() {
                   <span className="italic">{data.satellite.message}</span> A site saved now will have no
                   tree-canopy percentage — and Operational Analyst will show no canopy recommendation or its
                   ROI. The heat analysis above is unaffected.
+                </div>
+              )}
+
+              {/* 2026-08-29 fix: the save prompt (and its auto-redirect to
+                  Operational Analyst) now waits on this too — see the
+                  gating effect above. Surfaced here so that wait is visible
+                  rather than silent, with real per-slot progress (not a
+                  fabricated percentage) — same reasoning as ForecastPanel's
+                  own "X of 5 slots" line, shown here too since ForecastPanel
+                  is easy to miss while scanning for the save button. */}
+              {status === "success" && capturingForecast && (
+                <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface-2 px-3 py-2.5 text-[11px] text-fg-muted">
+                  <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-fg-muted" />
+                  Capturing the 12h forecast window ({capturedForecastCount} of {FORECAST_HOUR_OFFSETS.length} slots so
+                  far) — saving this site waits for all slots to settle (ok or failed) first.
                 </div>
               )}
 
