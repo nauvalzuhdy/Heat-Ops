@@ -5,12 +5,7 @@ import { useMapStore } from "@/store/mapStore";
 import { SEARCH_RESULT_ZOOM } from "@/lib/mapConfig";
 import { isInUS, US_ONLY_MESSAGE } from "@/lib/usBounds";
 import { parseLocationUrl, isShortMapLink } from "@/lib/parseLocationUrl";
-
-type GeocodeResult = {
-  lat: number;
-  lon: number;
-  displayName: string;
-};
+import LocationAutocomplete, { type LocationSuggestion } from "./LocationAutocomplete";
 
 const NOT_A_LINK_MESSAGE =
   "Couldn't read a location from this link. Try pasting a Google Maps or OpenStreetMap link, or use the search box instead.";
@@ -18,7 +13,6 @@ const NOT_A_LINK_MESSAGE =
 export default function SearchBox() {
   const map = useMapStore((s) => s.map);
   const [mode, setMode] = useState<"search" | "paste">("search");
-  const [query, setQuery] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -43,35 +37,9 @@ export default function SearchBox() {
     setErrorMessage("");
   }
 
-  async function handleSearchSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = query.trim();
-    if (!trimmed || !map) return;
-
-    setStatus("loading");
-    setErrorMessage("");
-
-    try {
-      const res = await fetch(`/api/geocode?q=${encodeURIComponent(trimmed)}`);
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error ?? "Search failed");
-      }
-
-      const results = data as GeocodeResult[];
-      if (results.length === 0) {
-        setStatus("error");
-        setErrorMessage("No results found.");
-        return;
-      }
-
-      const first = results[0];
-      flyToIfInUS(first.lat, first.lon);
-    } catch {
-      setStatus("error");
-      setErrorMessage("Search failed. Try again.");
-    }
+  function handleAutocompleteSelect(result: LocationSuggestion) {
+    if (!map) return;
+    flyToIfInUS(result.lat, result.lon);
   }
 
   async function handlePasteSubmit(e: React.FormEvent) {
@@ -148,30 +116,12 @@ export default function SearchBox() {
       </div>
 
       {mode === "search" ? (
-        <form onSubmit={handleSearchSubmit}>
-          <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 shadow-md dark:border-neutral-800 dark:bg-neutral-950">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              strokeWidth={1.75}
-              stroke="currentColor"
-              className="h-4 w-4 shrink-0 text-neutral-400 dark:text-neutral-500"
-            >
-              <circle cx="11" cy="11" r="6.25" />
-              <path strokeLinecap="round" d="m20 20-4-4" />
-            </svg>
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search a location…"
-              className="w-full bg-transparent text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none dark:text-white dark:placeholder:text-neutral-500"
-            />
-            {status === "loading" && (
-              <div className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-neutral-300 border-t-orange-500 dark:border-neutral-700" />
-            )}
-          </div>
-        </form>
+        <LocationAutocomplete
+          placeholder="Type to search a location…"
+          helperText="Select a location from the list, or press Enter to use the top result."
+          onSelect={handleAutocompleteSelect}
+          getBiasCenter={() => (map ? [map.getCenter().lng, map.getCenter().lat] : null)}
+        />
       ) : (
         <form onSubmit={handlePasteSubmit}>
           <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 shadow-md dark:border-neutral-800 dark:bg-neutral-950">

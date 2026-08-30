@@ -446,7 +446,7 @@ function ScenarioPanel({
         </label>
       </div>
 
-      <details className="mt-2 text-[10px] text-fg-muted" open>
+      <details className="mt-2 text-[10px] text-fg-muted">
         <summary className="cursor-pointer select-none font-medium text-fg-muted">
           Cooling &amp; energy assumptions
         </summary>

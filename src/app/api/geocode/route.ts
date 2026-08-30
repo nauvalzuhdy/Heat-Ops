@@ -5,12 +5,37 @@ import { NextRequest, NextResponse } from "next/server";
 // this route proxies server-side instead of calling Nominatim from the client.
 const NOMINATIM_USER_AGENT = "HeatOps/1.0 (FortyGuard Hackathon 2026)";
 
+type NominatimAddress = {
+  city?: string;
+  town?: string;
+  village?: string;
+  hamlet?: string;
+  county?: string;
+  state?: string;
+};
+
 type NominatimResult = {
   lat: string;
   lon: string;
   display_name: string;
   boundingbox: [string, string, string, string];
+  address?: NominatimAddress;
 };
+
+// "Phoenix Sky Harbor International Airport, Phoenix, AZ"-style secondary
+// line for the autocomplete dropdown (LocationAutocomplete.tsx) — built from
+// addressdetails' structured city/state rather than slicing display_name by
+// comma position, since a street-address result's first few comma segments
+// are house number/road, not the locality the user actually recognizes.
+function buildShortAddress(address: NominatimResult["address"], displayName: string): string {
+  const locality = address?.city ?? address?.town ?? address?.village ?? address?.hamlet ?? address?.county;
+  if (locality && address?.state) return `${locality}, ${address.state}`;
+  if (locality) return locality;
+  // No structured address (shouldn't happen with addressdetails=1, but keep
+  // a fallback) — drop the first display_name segment, which is the name.
+  const rest = displayName.split(",").slice(1).join(",").trim();
+  return rest || displayName;
+}
 
 export async function GET(request: NextRequest) {
   const lat = request.nextUrl.searchParams.get("lat");
@@ -32,6 +57,28 @@ export async function GET(request: NextRequest) {
   url.searchParams.set("q", q);
   url.searchParams.set("format", "json");
   url.searchParams.set("limit", "5");
+  url.searchParams.set("addressdetails", "1");
+  // FortyGuard coverage is US-only (project.md §2) — restrict the search
+  // itself rather than only checking after the fact, so out-of-US places
+  // never appear as autocomplete suggestions in the first place. Same
+  // endpoint serves both LocationAutocomplete's live suggestions and any
+  // plain submit, so this applies everywhere search is used.
+  url.searchParams.set("countrycodes", "us");
+
+  // Optional proximity bias (LocationAutocomplete passes the map's current
+  // center) — a bare place name like "Phoenix" otherwise ranks same-named
+  // cities in other states above POIs actually inside the Phoenix the user
+  // is looking at. `viewbox` without `bounded=1` is a soft preference, not
+  // a hard filter, so it never hides a genuinely better match elsewhere.
+  const nearLat = parseFloat(request.nextUrl.searchParams.get("near_lat") ?? "");
+  const nearLon = parseFloat(request.nextUrl.searchParams.get("near_lon") ?? "");
+  if (Number.isFinite(nearLat) && Number.isFinite(nearLon)) {
+    const delta = 0.4; // ~40km half-width — covers a metro area, not a whole state
+    url.searchParams.set(
+      "viewbox",
+      `${nearLon - delta},${nearLat + delta},${nearLon + delta},${nearLat - delta}`
+    );
+  }
 
   try {
     const res = await fetch(url, {
@@ -49,6 +96,7 @@ export async function GET(request: NextRequest) {
         lat: parseFloat(r.lat),
         lon: parseFloat(r.lon),
         displayName: r.display_name,
+        shortAddress: buildShortAddress(r.address, r.display_name),
         boundingBox: r.boundingbox.map(Number) as [number, number, number, number],
       }))
     );

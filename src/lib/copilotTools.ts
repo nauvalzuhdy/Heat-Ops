@@ -14,6 +14,7 @@ import {
   estimateCanopyCoolingRangeC,
   checkSolarCapacityWarning,
   COOLING_RESEARCH_SOURCES,
+  estimateHeatPenalty,
   type ROIInputs,
   type ROIResult,
 } from "./roiSimulator";
@@ -140,6 +141,115 @@ export const COPILOT_TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "compare_investments",
+      description:
+        "Financial, underwriting-style comparison of two capital investment options on the same site (Track 3: " +
+        "Finance & Underwriting) — e.g. '$100k in cool roof vs $100k in tree canopy, which pays back faster'. " +
+        "Reuses the exact same simulate_roi calculation as simulate_roi/compare_interventions — no separate " +
+        "formula. Each option is described by a budgetUsd (CapEx) and an interventionType; if the option's `inputs` " +
+        "doesn't already specify a concrete quantity (numTrees/canopyM2/solarKW), the tool derives one by dividing " +
+        "budgetUsd by that intervention's standard per-unit cost. Returns CapEx (totalCost), Annual Savings " +
+        "(annualSavingsUSD), and Payback Period (paybackYears) for both options side by side, as a best/worst-case " +
+        "range from the same researched canopy-cooling range simulate_roi uses. Note: cool_roof has no dedicated " +
+        "cost/savings model in this build — it is approximated using the artificial-canopy $/m² cost basis as the " +
+        "closest proxy (disclosed per-option, not silently substituted).",
+      parameters: {
+        type: "object",
+        properties: {
+          siteId: { type: "string", description: "UUID of the site. Omit to use the site currently open." },
+          optionA: {
+            type: "object",
+            description: "Investment option A.",
+            properties: {
+              label: { type: "string", description: "Short label, e.g. 'Cool roof (Zone A)'." },
+              interventionType: {
+                type: "string",
+                enum: ["tree_canopy", "artificial_canopy", "cool_roof", "solar"],
+                description:
+                  "Which cost/savings model this option uses. cool_roof is approximated via the " +
+                  "artificial_canopy cost basis (no dedicated model exists for it).",
+              },
+              budgetUsd: {
+                type: "number",
+                description:
+                  "CapEx budget for this option in USD, e.g. 100000 for $100k. Used to derive a quantity " +
+                  "(numTrees/canopyM2/solarKW) when inputs doesn't already specify one for this intervention.",
+              },
+              inputs: {
+                type: "object",
+                description:
+                  "Optional simulate_roi-style fields (numTrees/canopyM2/solarKW/costPerTreeUSD/etc.) to override " +
+                  "the budget-derived quantity or the default unit costs.",
+                additionalProperties: true,
+              },
+            },
+            required: ["interventionType", "budgetUsd"],
+          },
+          optionB: {
+            type: "object",
+            description: "Investment option B — same shape as optionA.",
+            properties: {
+              label: { type: "string", description: "Short label, e.g. 'Tree canopy (Zone B)'." },
+              interventionType: {
+                type: "string",
+                enum: ["tree_canopy", "artificial_canopy", "cool_roof", "solar"],
+                description:
+                  "Which cost/savings model this option uses. cool_roof is approximated via the " +
+                  "artificial_canopy cost basis (no dedicated model exists for it).",
+              },
+              budgetUsd: {
+                type: "number",
+                description:
+                  "CapEx budget for this option in USD, e.g. 100000 for $100k. Used to derive a quantity " +
+                  "(numTrees/canopyM2/solarKW) when inputs doesn't already specify one for this intervention.",
+              },
+              inputs: {
+                type: "object",
+                description:
+                  "Optional simulate_roi-style fields (numTrees/canopyM2/solarKW/costPerTreeUSD/etc.) to override " +
+                  "the budget-derived quantity or the default unit costs.",
+                additionalProperties: true,
+              },
+            },
+            required: ["interventionType", "budgetUsd"],
+          },
+        },
+        required: ["optionA", "optionB"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "estimate_heat_penalty",
+      description:
+        "Financial, underwriting-style projection of the extra annual cooling-energy cost (Operational " +
+        "Expenditure / OpEx penalty) a NEW building would add if built in a specific hot zone of a site — the " +
+        "'heat trap' cost of building somewhere hot, in dollars per year (Track 3: Finance & Underwriting). Reuses " +
+        "get_hotspot's own per-zone mean temperature and ROI Simulator's kWh/m²/°C and electricity-rate constants " +
+        "— no separate formula. Zones are identified the same way get_hotspot already ranks them: zoneIndex is " +
+        "1-based, 1 = the hottest zone at this site, 2 = second-hottest, etc. Call get_hotspot first if you don't " +
+        "already know which zone rank the user means.",
+      parameters: {
+        type: "object",
+        properties: {
+          siteId: { type: "string", description: "UUID of the site. Omit to use the site currently open." },
+          zoneIndex: {
+            type: "integer",
+            description:
+              "1-based hotspot rank of the zone to evaluate (1 = hottest zone at this site, per get_hotspot's " +
+              "`rank` field). Not a compass label and not the retired letter scheme — call get_hotspot first if " +
+              "unsure which rank the user's named zone corresponds to.",
+          },
+          buildingAreaM2: { type: "number", description: "Floor area in m² of the new building being evaluated." },
+        },
+        required: ["zoneIndex", "buildingAreaM2"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "check_new_building_feasibility",
       description:
         "Evaluate whether a site has good candidate zones for a new building, using heat-zone ranking (coolest " +
@@ -229,6 +339,10 @@ export function readingLabelFor(call: DeepseekToolCall): string {
       return "Running ROI simulation…";
     case "compare_interventions":
       return "Comparing intervention scenarios…";
+    case "compare_investments":
+      return "Comparing investment scenarios…";
+    case "estimate_heat_penalty":
+      return "Estimating heat penalty…";
     case "check_new_building_feasibility":
       return "Evaluating candidate zones…";
     case "get_all_sites":
@@ -257,6 +371,10 @@ export async function executeCopilotTool(
       return runSimulateRoi(call.function.arguments, ctx);
     case "compare_interventions":
       return runCompareInterventions(call.function.arguments, ctx);
+    case "compare_investments":
+      return runCompareInvestments(call.function.arguments, ctx);
+    case "estimate_heat_penalty":
+      return runEstimateHeatPenalty(call.function.arguments, ctx);
     case "check_new_building_feasibility":
       return checkNewBuildingFeasibility(call.function.arguments, ctx);
     case "get_all_sites":
@@ -550,6 +668,205 @@ async function runCompareInterventions(rawArgs: string, ctx: CopilotToolContext)
 
   const cheaper = rangeA.worst.totalCost <= rangeB.worst.totalCost ? labelA : labelB;
   const summaryLabel = `Compared ${labelA} vs ${labelB} — ${cheaper} costs less upfront`;
+
+  return { summaryLabel, structured, resultJson: JSON.stringify(structured) };
+}
+
+// ---------------------------------------------------------------------------
+// compare_investments (Track 3: Finance & Underwriting — financial-framed
+// version of compare_interventions above). Reuses simulateRoiRange/
+// simulateROI as-is; the only new logic here is turning a stated CapEx
+// budget into a concrete quantity (division by the intervention's per-unit
+// cost) when the caller didn't already give one via `inputs`.
+// ---------------------------------------------------------------------------
+
+const INVESTMENT_INTERVENTION_TYPES = ["tree_canopy", "artificial_canopy", "cool_roof", "solar"] as const;
+type InvestmentInterventionType = (typeof INVESTMENT_INTERVENTION_TYPES)[number];
+
+function isInvestmentInterventionType(v: unknown): v is InvestmentInterventionType {
+  return typeof v === "string" && (INVESTMENT_INTERVENTION_TYPES as readonly string[]).includes(v);
+}
+
+// No dedicated cool-roof cost/savings model exists in roiSimulator.ts (only
+// numTrees/canopyM2/solarKW are modeled) — confirmed with the user rather
+// than inventing an unsourced cost/kWh-savings constant. cool_roof is
+// approximated via the artificial-canopy $/m² bucket (costPerCanopyM2USD) as
+// the closest existing proxy; this note is surfaced per-option, never
+// silently substituted.
+const COOL_ROOF_PROXY_NOTE =
+  "No dedicated cool-roof cost/savings model exists in this build — approximated using the same $/m² shading-" +
+  "canopy cost basis (costPerCanopyM2USD) as the closest proxy, since a reflective-roof-specific cost/savings " +
+  "figure hasn't been sourced. Treat this option's numbers as a rough stand-in, not a cool-roof-specific estimate.";
+
+function buildInvestmentInputs(
+  interventionType: InvestmentInterventionType | null,
+  budgetUsd: number | null,
+  rawInputs: Record<string, unknown>,
+): { inputs: ROIInputs; derivedFromBudget: boolean } {
+  const inputs = coerceRoiInputs(rawInputs);
+
+  const hasExplicitQuantity =
+    (typeof rawInputs.numTrees === "number" && rawInputs.numTrees > 0) ||
+    (typeof rawInputs.canopyM2 === "number" && rawInputs.canopyM2 > 0) ||
+    (typeof rawInputs.solarKW === "number" && rawInputs.solarKW > 0);
+
+  let derivedFromBudget = false;
+  if (!hasExplicitQuantity && budgetUsd != null && budgetUsd > 0 && interventionType) {
+    derivedFromBudget = true;
+    switch (interventionType) {
+      case "tree_canopy":
+        inputs.numTrees = budgetUsd / inputs.costPerTreeUSD;
+        break;
+      case "artificial_canopy":
+      case "cool_roof":
+        inputs.canopyM2 = budgetUsd / inputs.costPerCanopyM2USD;
+        break;
+      case "solar":
+        inputs.solarKW = budgetUsd / inputs.costPerSolarKWUSD;
+        break;
+    }
+  }
+
+  if (budgetUsd != null) inputs.budgetUSD = budgetUsd;
+  return { inputs, derivedFromBudget };
+}
+
+function parseInvestmentOption(raw: Record<string, unknown>, defaultLabel: string) {
+  const label = typeof raw.label === "string" && raw.label.trim().length > 0 ? raw.label.trim() : defaultLabel;
+  const interventionType = isInvestmentInterventionType(raw.interventionType) ? raw.interventionType : null;
+  const budgetUsd = typeof raw.budgetUsd === "number" && Number.isFinite(raw.budgetUsd) ? raw.budgetUsd : null;
+  const rawInputs = (typeof raw.inputs === "object" && raw.inputs !== null ? raw.inputs : {}) as Record<string, unknown>;
+  const { inputs, derivedFromBudget } = buildInvestmentInputs(interventionType, budgetUsd, rawInputs);
+  const notes: string[] = [];
+  if (interventionType === "cool_roof") notes.push(COOL_ROOF_PROXY_NOTE);
+  if (derivedFromBudget) {
+    notes.push(
+      `Quantity derived from the ${budgetUsd != null ? `$${budgetUsd.toLocaleString()}` : "stated"} budget divided ` +
+        "by the standard per-unit cost (no explicit quantity was given) — override via `inputs` for a precise figure.",
+    );
+  }
+  return { label, interventionType, budgetUsd, inputs, note: notes.length > 0 ? notes.join(" ") : null };
+}
+
+async function runCompareInvestments(rawArgs: string, ctx: CopilotToolContext): Promise<ToolExecutionResult> {
+  const siteId = resolveSiteId(rawArgs, ctx);
+  if (!siteId) return errorResult("No site selected", "No siteId available — ask the user to open a site first.");
+
+  const areaM2 = await fetchSiteAreaM2(siteId);
+  if (areaM2 == null) return errorResult("Site area unavailable", "This site has no saved area to simulate against.");
+
+  const args = parseArgs(rawArgs);
+  const optionARaw = (typeof args.optionA === "object" && args.optionA !== null ? args.optionA : {}) as Record<string, unknown>;
+  const optionBRaw = (typeof args.optionB === "object" && args.optionB !== null ? args.optionB : {}) as Record<string, unknown>;
+
+  const optionA = parseInvestmentOption(optionARaw, "Option A");
+  const optionB = parseInvestmentOption(optionBRaw, "Option B");
+
+  const rangeA = simulateRoiRange(optionA.inputs, areaM2);
+  const rangeB = simulateRoiRange(optionB.inputs, areaM2);
+
+  const structured = {
+    siteId,
+    optionA: {
+      label: optionA.label,
+      interventionType: optionA.interventionType,
+      budgetUsd: optionA.budgetUsd,
+      resultBest: rangeA.best,
+      resultWorst: rangeA.worst,
+      isRange: rangeA.canopyAddedPct > 0,
+      solarWarning: rangeA.solarWarning,
+      note: optionA.note,
+    },
+    optionB: {
+      label: optionB.label,
+      interventionType: optionB.interventionType,
+      budgetUsd: optionB.budgetUsd,
+      resultBest: rangeB.best,
+      resultWorst: rangeB.worst,
+      isRange: rangeB.canopyAddedPct > 0,
+      solarWarning: rangeB.solarWarning,
+      note: optionB.note,
+    },
+    sources: COOLING_RESEARCH_SOURCES,
+    note:
+      "Financial comparison for underwriting/pitch purposes (Track 3: Finance & Underwriting). CapEx = " +
+      "resultBest/resultWorst.totalCost (identical between the two — cost doesn't vary with the cooling-range " +
+      "assumption, only Annual Savings and Payback Period do). resultBest = optimistic end of the researched " +
+      "canopy-cooling range, resultWorst = conservative end (identical for solar-only options). paybackYears is " +
+      "null — never Infinity/NaN — when annualSavingsUSD is zero or negative under that scenario, meaning the " +
+      "investment does not break even at all under current assumptions; narrate that in plain language (e.g. " +
+      "'does not pay back under current assumptions'), not as an error.",
+  };
+
+  const paybackLabel = (r: ROIResult) => (r.paybackYears == null ? "never" : `${r.paybackYears.toFixed(1)}y`);
+  const summaryLabel =
+    `${optionA.label} ($${Math.round(rangeA.worst.totalCost).toLocaleString()} CapEx, payback ${paybackLabel(rangeA.worst)}) vs ` +
+    `${optionB.label} ($${Math.round(rangeB.worst.totalCost).toLocaleString()} CapEx, payback ${paybackLabel(rangeB.worst)})`;
+
+  return { summaryLabel, structured, resultJson: JSON.stringify(structured) };
+}
+
+// ---------------------------------------------------------------------------
+// estimate_heat_penalty (Track 3: Finance & Underwriting — "mini B.1": the
+// added annual cooling-energy OpEx a new building would carry if built in a
+// specific hot zone). Reuses get_hotspot's own per-zone meanTempC (zonesFor/
+// binTilesToZones — no per-zone peak temperature exists in this build) and
+// roiSimulator.ts's estimateHeatPenalty(), which itself reuses
+// KWH_SAVED_PER_M2_PER_DEGREE_C / DEFAULT_ELECTRICITY_RATE_USD_PER_KWH
+// verbatim — no new formula, no new cost constants.
+// ---------------------------------------------------------------------------
+
+async function runEstimateHeatPenalty(rawArgs: string, ctx: CopilotToolContext): Promise<ToolExecutionResult> {
+  const siteId = resolveSiteId(rawArgs, ctx);
+  if (!siteId) return errorResult("No site selected", "No siteId available — ask the user to open a site first.");
+
+  const result = await fetchSiteForCompute(siteId);
+  if ("error" in result) return errorResult("Site lookup failed", result.error);
+  const { row, bbox } = result;
+
+  const args = parseArgs(rawArgs);
+  const zoneIndex = typeof args.zoneIndex === "number" && Number.isInteger(args.zoneIndex) ? args.zoneIndex : null;
+  const buildingAreaM2 =
+    typeof args.buildingAreaM2 === "number" && Number.isFinite(args.buildingAreaM2) && args.buildingAreaM2 > 0
+      ? args.buildingAreaM2
+      : null;
+
+  if (!buildingAreaM2) {
+    return errorResult("Missing building area", "buildingAreaM2 must be a positive number of square meters.");
+  }
+
+  const zones = zonesFor(row, bbox);
+  const rankedZones = zones.filter((z) => z.rank != null);
+  if (rankedZones.length === 0) {
+    return errorResult("No heat data for this site", "This site has no saved heat tiles yet to rank zones by.");
+  }
+
+  const zone = zoneIndex != null ? rankedZones.find((z) => z.rank === zoneIndex) : null;
+  if (!zone) {
+    return errorResult(
+      "Zone not found",
+      `zoneIndex must be a 1-based hotspot rank between 1 and ${rankedZones.length} for this site (1 = hottest) — ` +
+        `call get_hotspot first to see each zone's rank and compass label.`,
+    );
+  }
+
+  const penalty = estimateHeatPenalty(zone.meanTempC as number, buildingAreaM2);
+
+  const structured = {
+    siteId,
+    zone: { zoneLabel: zoneLabel(zone.row, zone.col), rank: zone.rank, meanTempC: zone.meanTempC, level: zone.level },
+    ...penalty,
+    note:
+      "Uses this zone's MEAN temperature (get_hotspot's meanTempC) — this build does not track a per-zone peak " +
+      "temperature. additionalKwhPerYear/additionalCostUSDPerYear.mid is the headline planning estimate; low/high " +
+      "mirror the same researched kWh/m²/°C range simulate_roi uses. noPenalty is true when this zone's mean " +
+      "temperature is already at/below the comfort baseline — no added cooling load, not a negative one. This is " +
+      "a planning-grade estimate for underwriting/pitch discussion, not a certified energy audit.",
+  };
+
+  const summaryLabel = penalty.noPenalty
+    ? `${structured.zone.zoneLabel} zone: no added cooling load (at/below ${penalty.baselineComfortC}°C baseline)`
+    : `${structured.zone.zoneLabel} zone: +$${Math.round(penalty.additionalCostUSDPerYear.mid).toLocaleString()}/yr OpEx penalty for a ${buildingAreaM2.toLocaleString()} m² building (Δ${penalty.deltaC.toFixed(1)}°C over ${penalty.baselineComfortC}°C)`;
 
   return { summaryLabel, structured, resultJson: JSON.stringify(structured) };
 }

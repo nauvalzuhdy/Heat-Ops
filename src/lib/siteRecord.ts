@@ -134,7 +134,10 @@ type Maybe<T> =
   | { status: "ok"; result: T; cached?: boolean; dateUsed?: string; isFallbackDate?: boolean }
   | { status: "error"; message: string };
 
-function centroidOfRing(ring: number[][]): { lat: number; lng: number } {
+// Exported for lib/routing/'s Phase 2 (§4.5) — it derives HeatTileRecord[]
+// from a fresh HeatmapResult the exact same way buildSiteRecord() does below,
+// for a one-off route-scoring probe that's never saved as a site.
+export function centroidOfRing(ring: number[][]): { lat: number; lng: number } {
   let lat = 0;
   let lng = 0;
   // Last vertex repeats the first in a closed GeoJSON ring; skip it so it is
@@ -147,7 +150,7 @@ function centroidOfRing(ring: number[][]): { lat: number; lng: number } {
   return { lat: lat / n, lng: lng / n };
 }
 
-function boundsOfRing(ring: number[][]): [number, number, number, number] {
+export function boundsOfRing(ring: number[][]): [number, number, number, number] {
   let west = Infinity;
   let south = Infinity;
   let east = -Infinity;

@@ -6,13 +6,14 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { TerraDraw, TerraDrawPolygonMode } from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { GeoJsonLayer } from "@deck.gl/layers";
+import { GeoJsonLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { AmbientLight, DirectionalLight, LightingEffect } from "@deck.gl/core";
 import * as turf from "@turf/turf";
 import { useMapStore } from "@/store/mapStore";
 import { useDrawStore } from "@/store/drawStore";
 import { useAOIStore } from "@/store/aoiStore";
 import { useAnalysisStore } from "@/store/analysisStore";
+import { useRouteStore } from "@/store/routeStore";
 import {
   DEFAULT_CENTER,
   DEFAULT_ZOOM,
@@ -22,11 +23,14 @@ import {
   ESRI_SATELLITE_SOURCE_ID,
   ESRI_SATELLITE_LAYER_ID,
   ESRI_SATELLITE_MAX_ZOOM,
+  ROUTE_COLORS_RGBA,
+  ROUTE_ORIGIN_COLOR_RGBA,
+  ROUTE_DESTINATION_COLOR_RGBA,
 } from "@/lib/mapConfig";
 import SearchBox from "./SearchBox";
-import ViewModeToggle from "./ViewModeToggle";
-import RenderModeToggle from "./RenderModeToggle";
+import ViewControls from "./ViewControls";
 import DrawControl from "./DrawControl";
+import RouteControl from "./RouteControl";
 import { LANDCOVER_COLORS_RGBA } from "@/lib/landcoverColors";
 import {
   PHOTOREALISTIC_MAX_BUILDINGS,
@@ -99,6 +103,9 @@ export default function MapCanvas() {
   const analysisStatus = useAnalysisStore((s) => s.status);
   const aoiGeometry = useAOIStore((s) => s.geometry);
   const setRenderMode = useMapStore((s) => s.setRenderMode);
+  const routes = useRouteStore((s) => s.routes);
+  const routeOrigin = useRouteStore((s) => s.origin);
+  const routeDestination = useRouteStore((s) => s.destination);
   const [photorealState, setPhotorealState] = useState<PhotorealState>({ status: "idle" });
 
   useEffect(() => {
@@ -158,6 +165,14 @@ export default function MapCanvas() {
       terraDraw.start();
       terraDraw.setMode("static");
       useDrawStore.getState().setTerraDraw(terraDraw);
+
+      // §4.5 Route tool — always attached, a no-op whenever no pick is in
+      // progress (simpler and behaviorally identical to attaching/detaching
+      // the listener on every pickingStage change).
+      map.on("click", (e) => {
+        if (useRouteStore.getState().pickingStage === "idle") return;
+        useRouteStore.getState().handleMapClick([e.lngLat.lng, e.lngLat.lat]);
+      });
     });
 
     setMap(map);
@@ -166,6 +181,7 @@ export default function MapCanvas() {
       useDrawStore.getState().setTerraDraw(null);
       useDrawStore.getState().setIsDrawing(false);
       useAOIStore.getState().clearAOI();
+      useRouteStore.getState().clearRoute();
       overlayRef.current = null;
       map.remove();
       setMap(null);
@@ -418,8 +434,52 @@ export default function MapCanvas() {
       }
     }
 
+    // §4.5 Route tool — one line per scored alternative (stable color per
+    // INDEX, not per label, since labels can double up on one route) plus
+    // origin/destination markers. Rendered on top of everything else so a
+    // route is never hidden under an extruded building/ground layer.
+    routes.forEach((r, i) => {
+      layers.push(
+        new GeoJsonLayer({
+          id: `route-${i}`,
+          data: turf.featureCollection([turf.feature(r.alt.geometry)]),
+          filled: false,
+          stroked: true,
+          getLineColor: ROUTE_COLORS_RGBA[i] ?? ROUTE_COLORS_RGBA[ROUTE_COLORS_RGBA.length - 1],
+          lineWidthMinPixels: 4,
+          pickable: false,
+        })
+      );
+    });
+    if (routeOrigin) {
+      layers.push(
+        new ScatterplotLayer({
+          id: "route-origin",
+          data: [{ position: routeOrigin.lngLat }],
+          getPosition: (d) => d.position,
+          getFillColor: ROUTE_ORIGIN_COLOR_RGBA,
+          getRadius: 8,
+          radiusUnits: "pixels",
+          pickable: false,
+        })
+      );
+    }
+    if (routeDestination) {
+      layers.push(
+        new ScatterplotLayer({
+          id: "route-destination",
+          data: [{ position: routeDestination.lngLat }],
+          getPosition: (d) => d.position,
+          getFillColor: ROUTE_DESTINATION_COLOR_RGBA,
+          getRadius: 8,
+          radiusUnits: "pixels",
+          pickable: false,
+        })
+      );
+    }
+
     overlay.setProps({ layers });
-  }, [analysisData, renderMode, photorealState]);
+  }, [analysisData, renderMode, photorealState, routes, routeOrigin, routeDestination]);
 
   // §4.6 point 4 — frame the AOI in 3D once analysis completes, rather than
   // leaving the camera wherever the user last left it while drawing.
@@ -458,47 +518,42 @@ export default function MapCanvas() {
     // flex-1/h-auto side-by-side behavior, unchanged.
     <div className="relative h-[55vh] w-full shrink-0 lg:h-auto lg:w-auto lg:flex-1">
       <div ref={containerRef} className="h-full w-full" />
-      {/* Mobile/tablet (<lg): stacked rows (search, then toggles wrapped
-          together) so nothing overflows the map's width. At `lg`+: the
-          original single-row 3-column grid, unchanged — same classes as
-          before, just now under an `lg:` prefix instead of unprefixed. */}
-      <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-col gap-2 lg:inset-x-4 lg:top-4 lg:grid lg:grid-cols-[auto_1fr_auto] lg:items-start lg:gap-4">
+      {/* Mobile/tablet (<lg): stacked rows (search, then the view-controls
+          trigger) so nothing overflows the map's width. At `lg`+: a single
+          row, search on the left, view controls on the right. §4.6 bug fix —
+          ViewModeToggle/RenderModeToggle (5 buttons across 2 toggles) used to
+          render unconditionally side by side here and crowded/clipped labels;
+          both now live inside ViewControls' collapsed-by-default panel. */}
+      <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-col gap-2 lg:inset-x-4 lg:top-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="pointer-events-auto w-full lg:w-auto">
           <SearchBox />
         </div>
-        {/* `pointer-events-auto` is repeated on each inner div (not just the
-            wrapper) because `lg:contents` removes the wrapper's own box at
-            desktop — a box-less element can't reliably pass its
-            pointer-events down through `display:contents` across browsers,
-            so each grid item needs the class directly rather than inheriting it. */}
-        <div className="flex flex-wrap items-center gap-2 lg:contents">
-          <div className="pointer-events-auto lg:justify-self-center">
-            <ViewModeToggle />
-          </div>
-          <div className="pointer-events-auto flex flex-col items-start gap-1 lg:justify-self-end lg:items-end">
-            <RenderModeToggle
-              photorealDisabledReason={
-                photorealState.status === "too_large"
-                  ? `Photo mode is unavailable for this AOI — ${photorealState.buildingCount.toLocaleString()} buildings exceeds the ${PHOTOREALISTIC_MAX_BUILDINGS}-building limit. Try a smaller AOI.`
-                  : null
-              }
-            />
-            {renderMode === "photoreal" && photorealState.status === "loading" && (
-              <span className="pointer-events-none rounded-full bg-surface px-2.5 py-1 text-[10px] text-fg-muted shadow-card">
-                Sampling colors from satellite imagery…
-              </span>
-            )}
-            {renderMode === "photoreal" && photorealState.status === "error" && (
-              <span className="pointer-events-none rounded-full bg-surface px-2.5 py-1 text-[10px] text-red-500 shadow-card">
-                Couldn&apos;t sample satellite colors — showing neutral gray instead.
-              </span>
-            )}
-          </div>
+        <div className="pointer-events-auto flex flex-col items-end gap-1 self-end lg:self-auto">
+          <ViewControls
+            photorealDisabledReason={
+              photorealState.status === "too_large"
+                ? `Photo mode is unavailable for this AOI — ${photorealState.buildingCount.toLocaleString()} buildings exceeds the ${PHOTOREALISTIC_MAX_BUILDINGS}-building limit. Try a smaller AOI.`
+                : null
+            }
+          />
+          {renderMode === "photoreal" && photorealState.status === "loading" && (
+            <span className="pointer-events-none rounded-full bg-surface px-2.5 py-1 text-[10px] text-fg-muted shadow-card">
+              Sampling colors from satellite imagery…
+            </span>
+          )}
+          {renderMode === "photoreal" && photorealState.status === "error" && (
+            <span className="pointer-events-none rounded-full bg-surface px-2.5 py-1 text-[10px] text-red-500 shadow-card">
+              Couldn&apos;t sample satellite colors — showing neutral gray instead.
+            </span>
+          )}
         </div>
       </div>
-      <div className="pointer-events-none absolute bottom-3 left-3 z-10 lg:bottom-4 lg:left-4">
+      <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 lg:bottom-4 lg:left-4">
         <div className="pointer-events-auto">
           <DrawControl />
+        </div>
+        <div className="pointer-events-auto">
+          <RouteControl />
         </div>
       </div>
     </div>

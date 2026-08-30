@@ -1,7 +1,7 @@
-// FortyGuard coverage is US-only. Centered on Gigafactory Texas (Austin, TX) —
-// the current demo site, and the state this project's FortyGuard API key is
-// registered to. Was Phoenix, AZ before that.
-export const DEFAULT_CENTER: [number, number] = [-97.6169, 30.2219];
+// FortyGuard coverage is US-only. Phoenix, AZ is the default demo AOI city —
+// see project memory for why (extreme urban heat island, fits the "heat" story).
+// Was briefly moved to Gigafactory Texas (Austin, TX); moved back to Phoenix.
+export const DEFAULT_CENTER: [number, number] = [-112.074, 33.4484];
 export const DEFAULT_ZOOM = 12;
 export const SEARCH_RESULT_ZOOM = 14;
 
@@ -48,3 +48,28 @@ export function pickGranularity(areaM2: number): 60 | 80 | 100 {
 // constraint (see project memory), not an arbitrary UI choice.
 export const FORECAST_HOUR_OFFSETS = [0, 3, 6, 9, 12] as const;
 export type ForecastHourOffset = (typeof FORECAST_HOUR_OFFSETS)[number];
+
+// §4.5 heat-aware routing — one fixed color per alternative-route INDEX (not
+// per label): a route's color must stay stable regardless of which/how-many
+// of Fastest/Coolest/Efficient land on it (a route can carry a combined
+// badge). Distinct from LANDCOVER_COLORS_RGBA (lib/landcoverColors.ts) —
+// that palette is land-cover categories, this one is ranked alternatives, a
+// different semantic entirely.
+export const ROUTE_COLORS_RGBA: [number, number, number, number][] = [
+  [37, 99, 235, 220], // route 0 — blue
+  [16, 185, 129, 220], // route 1 — green
+  [245, 158, 11, 220], // route 2 — amber
+];
+export const ROUTE_ORIGIN_COLOR_RGBA: [number, number, number, number] = [16, 185, 129, 255];
+export const ROUTE_DESTINATION_COLOR_RGBA: [number, number, number, number] = [239, 68, 68, 255];
+
+// Fixed sampling interval along a route line — the middle of the spec's
+// "~200-300m" range. Single source of truth: lib/routing/sampling.ts's
+// sampleRouteLine() and RoutePanel.tsx's disclosure copy both read this
+// constant so the two can never drift apart.
+export const ROUTE_SAMPLE_INTERVAL_M = 250;
+
+// Nearest-tile fallback threshold (lib/routing/coverage.ts's nearestTileTemp)
+// — beyond this distance from every pooled tile's centroid, a sample point is
+// treated as genuinely uncovered rather than given a misleading distant guess.
+export const ROUTE_UNCOVERED_TILE_MAX_DISTANCE_M = 400;

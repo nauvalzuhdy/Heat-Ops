@@ -45,6 +45,9 @@ Data acquisition.
 - **Forecast +12h** — five hourly slots (+0/+3/+6/+9/+12h), fetched automatically right after the block above, concurrently with each other (see *Why forecast capture waits for the main heatmap* below for why it isn't fired at the same instant as that first block)
 - 3D building massing (deck.gl) with Schematic / Satellite / Land-cover / Photo view modes
 - Saves everything as a **site record** in Supabase, with three generated images
+- **Route** — pick an origin and destination (search-as-you-type or click the map, either can set either point), fetch alternatives from OSRM, and compare them by average heat exposure alongside the fastest option
+
+![Map View — Route tool, two OSRM alternatives ranked by average heat exposure against the fastest option](public/screen/route.png)
 
 ### 2. Operational Analyst (`/analyst`)
 
@@ -61,6 +64,8 @@ Analysis and decisions, reading only the saved site record — no re-fetching, n
 | **Download PDF** | A print-ready assessment report of everything above |
 
 ![Operational Analyst — Hotspot Detection tab, satellite view, pixel-native thermal grid, and per-zone temperature chart](public/screen/heatspot.png)
+
+![Operational Analyst — Download PDF tab, Executive Summary page of the generated report](public/screen/pdfreport.png)
 
 ### 3. AI Copilot (`/copilot`)
 

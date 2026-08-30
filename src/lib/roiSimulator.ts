@@ -205,6 +205,69 @@ export const ELECTRICITY_RATE_ASSUMPTION_TEXT =
 export const HORIZON_YEAR_OPTIONS = [5, 10, 20] as const;
 export type HorizonYears = (typeof HORIZON_YEAR_OPTIONS)[number];
 
+// ---------------------------------------------------------------------------
+// Heat penalty estimator (AI Copilot's `estimate_heat_penalty` tool — the
+// mirror image of this file's savings formula above, applied as an added
+// cooling LOAD instead of a reduction: "how much more does a new building in
+// a hot zone cost to cool per year, vs. building at a comfortable baseline
+// temperature". Reuses KWH_SAVED_PER_M2_PER_DEGREE_C and
+// DEFAULT_ELECTRICITY_RATE_USD_PER_KWH verbatim — no second set of constants.
+// ---------------------------------------------------------------------------
+
+// Indoor cooling setpoint most commercial HVAC systems target — ASHRAE
+// Standard 55's typical thermal-comfort range is ~20-24°C; 22°C is that
+// range's midpoint, not the low or high end. Confirmed with the user as this
+// feature's baseline (not independently re-derived) before use.
+export const HEAT_PENALTY_BASELINE_COMFORT_C = 22;
+
+export type HeatPenaltyEstimate = {
+  zoneMeanTempC: number;
+  baselineComfortC: number;
+  deltaC: number;
+  /** true when the zone's mean temperature is at/below the comfort baseline — no added cooling load, not a negative one. */
+  noPenalty: boolean;
+  buildingAreaM2: number;
+  kwhPerM2PerDegreeC: typeof KWH_SAVED_PER_M2_PER_DEGREE_C;
+  electricityRateUSDPerKWh: number;
+  /** Low/mid/high mirror KWH_SAVED_PER_M2_PER_DEGREE_C's own range — mid is the headline planning estimate. */
+  additionalKwhPerYear: { low: number; mid: number; high: number };
+  additionalCostUSDPerYear: { low: number; mid: number; high: number };
+};
+
+// `zoneMeanTempC` comes from get_hotspot/binTilesToZones' existing per-zone
+// meanTempC (no per-zone peak temperature is tracked anywhere in this build —
+// confirmed with the user rather than adding new max-aggregation logic to
+// binTilesToZones just for this one estimate). Same multiplicative shape as
+// simulateROI()'s own estimatedKwhSavedPerYear/annualSavingsUSD lines above
+// (°C * area * kWh/m²/°C, then * $/kWh) — not a new formula, just run as an
+// added load (deltaC = zone temp minus comfort baseline) instead of a
+// reduction (deltaC = expected cooling achieved).
+export function estimateHeatPenalty(zoneMeanTempC: number, buildingAreaM2: number): HeatPenaltyEstimate {
+  const deltaC = Math.max(0, zoneMeanTempC - HEAT_PENALTY_BASELINE_COMFORT_C);
+  const kwhFor = (perM2PerDegreeC: number) => deltaC * buildingAreaM2 * perM2PerDegreeC;
+  const additionalKwhPerYear = {
+    low: kwhFor(KWH_SAVED_PER_M2_PER_DEGREE_C.low),
+    mid: kwhFor(KWH_SAVED_PER_M2_PER_DEGREE_C.mid),
+    high: kwhFor(KWH_SAVED_PER_M2_PER_DEGREE_C.high),
+  };
+  const additionalCostUSDPerYear = {
+    low: additionalKwhPerYear.low * DEFAULT_ELECTRICITY_RATE_USD_PER_KWH,
+    mid: additionalKwhPerYear.mid * DEFAULT_ELECTRICITY_RATE_USD_PER_KWH,
+    high: additionalKwhPerYear.high * DEFAULT_ELECTRICITY_RATE_USD_PER_KWH,
+  };
+  return {
+    zoneMeanTempC,
+    baselineComfortC: HEAT_PENALTY_BASELINE_COMFORT_C,
+    deltaC,
+    noPenalty: deltaC <= 0,
+    buildingAreaM2,
+    kwhPerM2PerDegreeC: KWH_SAVED_PER_M2_PER_DEGREE_C,
+    electricityRateUSDPerKWh: DEFAULT_ELECTRICITY_RATE_USD_PER_KWH,
+    additionalKwhPerYear,
+    additionalCostUSDPerYear,
+  };
+}
+
 export type ROIInputs = {
   budgetUSD: number | null;
   numTrees: number;
